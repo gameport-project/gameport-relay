@@ -15,6 +15,8 @@ Only this, never a name, a path, a serial number or an e-mail:
 { "v": 1, "appId": 1125240, "verdict": "works", "app": "0.7.2", "device": "quest", "voter": "<32 hex digits>", "game": "<optional build id>", "offline": false }
 ```
 
+`verdict` is `works`, `offline_only` (it works, but only without the network: its online or multiplayer part does not) or `fails`.
+
 `offline` is optional and only counts on a vote that says "works": it tells the game worked with GamePort's offline mode on, which the app sets by itself and never when the result could be confused with something else.
 
 `voter` is a random number the app made for itself; it identifies nobody. The relay keeps only a short hash of it (salted with the secret `VOTER_SALT`), so the number the app keeps is never in the database. A player who votes again on the same game replaces their vote. The relay refuses anything that is not exactly this shape, and more than 5 votes a minute from one address (the address is used for that and nothing else). The date kept with a vote is the day, nothing finer.
@@ -28,8 +30,8 @@ Only this, never a name, a path, a serial number or an e-mail:
 `GET /summary` returns the totals per game, and the same totals for each kind of device (a game can work on one and not on another), and nothing about any player:
 
 ```json
-{ "v": 1, "games": [{ "appId": 1125240, "works": 7, "fails": 1, "worksOffline": 3,
-  "devices": { "quest": { "works": 6, "fails": 0, "worksOffline": 3 }, "pico": { "works": 1, "fails": 1, "worksOffline": 0 } } }] }
+{ "v": 1, "games": [{ "appId": 1125240, "works": 7, "offlineOnly": 2, "fails": 1, "worksOffline": 3,
+  "devices": { "quest": { "works": 6, "offlineOnly": 2, "fails": 0, "worksOffline": 3 }, "pico": { "works": 1, "offlineOnly": 0, "fails": 1, "worksOffline": 0 } } }] }
 ```
 
 ## Setting it up once
@@ -41,7 +43,7 @@ From this folder, with Node 20 or later:
 3. **Set the salt**, any long random text, typed when asked and never written in a file: `npx wrangler secret put VOTER_SALT`.
 4. **Deploy.** `npx wrangler deploy`. The address is `https://gameport-relay.<account subdomain>.workers.dev`; it must contain nothing personal.
 
-A database made before the `offline` column existed needs it added once: `npx wrangler d1 execute gameport-votes --remote --file=migrations/0001_offline.sql`.
+A database made earlier needs the migrations run once, in order, from this folder: `npx wrangler d1 execute gameport-votes --remote --file=migrations/0001_offline.sql` (the `offline` column), then `--file=migrations/0002_offline_only.sql` (the answer "offline only"), then `npx wrangler deploy`.
 
 Back up the votes at any time with `npx wrangler d1 export gameport-votes --remote --output votes.sql`.
 

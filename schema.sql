@@ -2,7 +2,7 @@
 CREATE TABLE IF NOT EXISTS votes (
   app_id  INTEGER NOT NULL,
   voter   TEXT    NOT NULL,  -- a short salted hash, never the id the app keeps
-  verdict TEXT    NOT NULL CHECK (verdict IN ('works', 'fails')),
+  verdict TEXT    NOT NULL CHECK (verdict IN ('works', 'offline_only', 'fails')),
   app     TEXT    NOT NULL,  -- the version of GamePort
   game    TEXT,              -- the build of the game, when the app knows it
   device  TEXT    NOT NULL,  -- quest, pico, phone, tablet or other
@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS votes (
 CREATE TABLE IF NOT EXISTS votes_test (
   app_id  INTEGER NOT NULL,
   voter   TEXT    NOT NULL,  -- a short salted hash, never the id the app keeps
-  verdict TEXT    NOT NULL CHECK (verdict IN ('works', 'fails')),
+  verdict TEXT    NOT NULL CHECK (verdict IN ('works', 'offline_only', 'fails')),
   app     TEXT    NOT NULL,  -- the version of GamePort
   game    TEXT,              -- the build of the game, when the app knows it
   device  TEXT    NOT NULL,  -- quest, pico, phone, tablet or other

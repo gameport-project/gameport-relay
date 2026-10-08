@@ -2,7 +2,8 @@
 // keeps one vote per player and per game in a small database, and publishes the totals. It stores no name, no address, no log of who sent what.
 // See README.md.
 
-const VERDICTS = new Set(["works", "fails"]);
+// "offline_only": the game works, but only without the network (its online or multiplayer part does not).
+const VERDICTS = new Set(["works", "offline_only", "fails"]);
 const DEVICES = new Set(["quest", "pico", "phone", "tablet", "other"]);
 const MAX_BODY_BYTES = 1024;
 const MAX_APP_ID = 2_000_000_000;
@@ -42,7 +43,7 @@ const ROUTES = {
 
 const upsert = (table) => `INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT (app_id, voter) DO UPDATE SET verdict = excluded.verdict, app = excluded.app, game = excluded.game, device = excluded.device, offline = excluded.offline, updated = excluded.updated`;
-const summaryQuery = (table) => `SELECT app_id AS appId, device, SUM(verdict = 'works') AS works, SUM(verdict = 'fails') AS fails, SUM(verdict = 'works' AND offline = 1) AS worksOffline FROM ${table} GROUP BY app_id, device ORDER BY app_id, device`;
+const summaryQuery = (table) => `SELECT app_id AS appId, device, SUM(verdict = 'works') AS works, SUM(verdict = 'offline_only') AS offlineOnly, SUM(verdict = 'fails') AS fails, SUM(verdict = 'works' AND offline = 1) AS worksOffline FROM ${table} GROUP BY app_id, device ORDER BY app_id, device`;
 
 function reply(status, body, headers = {}) {
   const json = body !== undefined && typeof body === "object";
@@ -87,11 +88,12 @@ async function summary(env, table) {
   // One game, with its totals and the same totals for each kind of device: "it works on a Quest" is not "it works on a phone".
   const byGame = new Map();
   for (const row of rows) {
-    const game = byGame.get(row.appId) ?? { appId: row.appId, works: 0, fails: 0, worksOffline: 0, devices: {} };
+    const game = byGame.get(row.appId) ?? { appId: row.appId, works: 0, offlineOnly: 0, fails: 0, worksOffline: 0, devices: {} };
     game.works += row.works;
+    game.offlineOnly += row.offlineOnly;
     game.fails += row.fails;
     game.worksOffline += row.worksOffline;
-    game.devices[row.device] = { works: row.works, fails: row.fails, worksOffline: row.worksOffline };
+    game.devices[row.device] = { works: row.works, offlineOnly: row.offlineOnly, fails: row.fails, worksOffline: row.worksOffline };
     byGame.set(row.appId, game);
   }
   return reply(200, { v: 1, games: [...byGame.values()] }, { "cache-control": "public, max-age=300" });
