@@ -1,0 +1,8 @@
+{
+  "name": "gameport-relay",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-sqlite --no-warnings --test worker.test.js"
+  }
+}

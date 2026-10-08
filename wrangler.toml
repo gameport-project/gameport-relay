@@ -1,0 +1,22 @@
+name = "gameport-relay"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+# No address for previews: the relay has one address, the public one.
+preview_urls = false
+workers_dev = true
+
+# Nothing secret here: this file is public. The only secret is VOTER_SALT, kept in Cloudflare (see README.md).
+
+# The database of votes. The id is given by `wrangler d1 create gameport-votes`; it identifies the database, it opens nothing.
+[[d1_databases]]
+binding = "DB"
+database_name = "gameport-votes"
+database_id = "5abee382-fd67-4a86-bf1e-11392bfc40e6"
+
+# At most 5 votes a minute from one address.
+[[ratelimits]]
+name = "LIMITER"
+namespace_id = "1001"
+  [ratelimits.simple]
+  limit = 5
+  period = 60
