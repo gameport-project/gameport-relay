@@ -343,3 +343,132 @@ describe("the migration that allows the answer offline only", () => {
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM votes WHERE app_id = 1125240").get().n, 1);
   });
 });
+
+
+describe("the reports", () => {
+  let db;
+  let env;
+  const ZIP = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 250, 251, 252, 253, 254, 255]);
+  const query = (extra = {}) => new URLSearchParams({ appId: "846470", app: "0.7.4", device: "quest", voter: VOTER, ...extra }).toString();
+  const send = (body = ZIP, path = "/report", extra = {}, method = "POST") =>
+    new Request(`https://relay.example.invalid${path}?${query(extra)}`, { method, body: method === "POST" ? body : undefined });
+  const read = (path, token) => new Request(`https://relay.example.invalid${path}`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+  const count = (table) => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
+
+  beforeEach(() => {
+    db = new DatabaseSync(":memory:");
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    env = { DB: d1(db), VOTER_SALT: "salt", ADMIN_TOKEN: "the-developer-token" };
+  });
+
+  it("stores a report, with the day and the size, and the zip as it came", async () => {
+    assert.equal((await worker.fetch(send(), env)).status, 204);
+    const row = db.prepare("SELECT * FROM reports").get();
+    assert.equal(row.app_id, 846470);
+    assert.equal(row.app, "0.7.4");
+    assert.equal(row.device, "quest");
+    assert.equal(row.size, ZIP.length);
+    assert.equal(row.updated, new Date().toISOString().slice(0, 10));
+    assert.deepEqual([...Buffer.from(row.data, "base64")], [...ZIP]);
+    assert.equal(count("votes"), 0);
+  });
+
+  it("never stores the raw voter id, nor the address", async () => {
+    await worker.fetch(new Request(`https://relay.example.invalid/report?${query()}`, { method: "POST", body: ZIP, headers: { "CF-Connecting-IP": "203.0.113.9" } }), env);
+    const row = db.prepare("SELECT * FROM reports").get();
+    assert.match(row.voter, /^[0-9a-f]{12}$/);
+    const text = JSON.stringify({ ...row, data: "" });
+    assert.ok(!text.includes(VOTER));
+    assert.ok(!text.includes("203.0.113.9"));
+  });
+
+  it("refuses what is not a zip, a zip that is too large, and facts that are not as expected", async () => {
+    assert.equal((await worker.fetch(send(new Uint8Array([1, 2, 3, 4, 5, 6])), env)).status, 400);
+    assert.equal((await worker.fetch(send(new Uint8Array(0)), env)).status, 400);
+    const big = new Uint8Array(1_000_001);
+    big.set([0x50, 0x4b, 0x03, 0x04]);
+    assert.equal((await worker.fetch(send(big), env)).status, 413);
+    for (const extra of [{ appId: "0" }, { appId: "abc" }, { app: "0.7" }, { device: "toaster" }, { voter: "short" }, { voter: VOTER.toUpperCase() }]) {
+      assert.equal((await worker.fetch(send(ZIP, "/report", extra), env)).status, 400, JSON.stringify(extra));
+    }
+    assert.equal((await worker.fetch(send(ZIP, "/report", {}, "GET"), env)).status, 405);
+    assert.equal(count("reports"), 0);
+  });
+
+  it("keeps one report per player and per game: a new one replaces the old", async () => {
+    await worker.fetch(send(ZIP), env);
+    const newer = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 9, 9, 9]);
+    await worker.fetch(send(newer, "/report", { app: "0.7.5" }), env);
+    assert.equal(count("reports"), 1);
+    const row = db.prepare("SELECT * FROM reports").get();
+    assert.equal(row.app, "0.7.5");
+    assert.deepEqual([...Buffer.from(row.data, "base64")], [...newer]);
+    await worker.fetch(send(ZIP, "/report", { voter: OTHER }), env);
+    await worker.fetch(send(ZIP, "/report", { appId: "42" }), env);
+    assert.equal(count("reports"), 3);
+  });
+
+  it("keeps the test builds in their own table", async () => {
+    assert.equal((await worker.fetch(send(ZIP, "/test/report"), env)).status, 204);
+    assert.equal(count("reports_test"), 1);
+    assert.equal(count("reports"), 0);
+  });
+
+  it("removes the reports older than 30 days when a new one arrives", async () => {
+    const insert = db.prepare("INSERT INTO reports (app_id, voter, app, device, size, data, updated) VALUES (?, ?, '0.7.3', 'quest', 4, 'UEsDBA==', ?)");
+    const daysAgo = (days) => new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+    insert.run(1, "aaaaaaaaaaaa", daysAgo(45));
+    insert.run(2, "bbbbbbbbbbbb", daysAgo(10));
+    await worker.fetch(send(ZIP), env);
+    assert.deepEqual(db.prepare("SELECT app_id FROM reports ORDER BY app_id").all().map((r) => r.app_id), [2, 846470]);
+  });
+
+  it("answers 429 and stores nothing when the limiter says stop, with a key of its own", async () => {
+    const seen = [];
+    const limiter = { limit: async (options) => (seen.push(options.key), { success: false }) };
+    const request = new Request(`https://relay.example.invalid/report?${query()}`, { method: "POST", body: ZIP, headers: { "CF-Connecting-IP": "203.0.113.9" } });
+    assert.equal((await worker.fetch(request, { ...env, LIMITER: limiter })).status, 429);
+    assert.deepEqual(seen, ["report:203.0.113.9"]);
+    assert.equal(count("reports"), 0);
+  });
+
+  it("answers 500 without repeating what the database said", async () => {
+    const broken = { prepare: () => ({ bind: () => ({ run: async () => { throw new Error("D1_ERROR: secret detail"); } }) }) };
+    const response = await worker.fetch(send(), { ...env, DB: broken });
+    assert.equal(response.status, 500);
+    assert.ok(!(await response.text()).includes("secret detail"));
+  });
+
+  it("lists the reports and gives one back, for the developer's token and nobody else", async () => {
+    await worker.fetch(send(), env);
+    const listed = await worker.fetch(read("/admin/reports", "the-developer-token"), env);
+    assert.equal(listed.status, 200);
+    const { reports } = await listed.json();
+    assert.equal(reports.length, 1);
+    assert.deepEqual(Object.keys(reports[0]).sort(), ["app", "appId", "device", "id", "size", "updated"]);
+    const zip = await worker.fetch(read(`/admin/reports/${reports[0].id}`, "the-developer-token"), env);
+    assert.equal(zip.status, 200);
+    assert.equal(zip.headers.get("content-type"), "application/zip");
+    assert.deepEqual([...new Uint8Array(await zip.arrayBuffer())], [...ZIP]);
+  });
+
+  it("shows nothing without the token, with a wrong one, or when the relay has no token", async () => {
+    await worker.fetch(send(), env);
+    for (const request of [read("/admin/reports"), read("/admin/reports", "wrong"), read("/admin/reports/1"), read("/admin/reports/1", "wrong")]) {
+      assert.equal((await worker.fetch(request, env)).status, 404);
+    }
+    const noToken = { ...env, ADMIN_TOKEN: undefined };
+    assert.equal((await worker.fetch(read("/admin/reports", "undefined"), noToken)).status, 404);
+    assert.equal((await worker.fetch(read("/admin/reports", ""), noToken)).status, 404);
+  });
+
+  it("reads the test table on its own route, and refuses an id that is not a number or not there", async () => {
+    await worker.fetch(send(ZIP, "/test/report"), env);
+    assert.equal((await (await worker.fetch(read("/admin/reports", "the-developer-token"), env)).json()).reports.length, 0);
+    assert.equal((await (await worker.fetch(read("/admin/test/reports", "the-developer-token"), env)).json()).reports.length, 1);
+    for (const path of ["/admin/reports/abc", "/admin/reports/999", "/admin/reports/1/2", "/admin/reportsx"]) {
+      assert.equal((await worker.fetch(read(path, "the-developer-token"), env)).status, 404, path);
+    }
+    assert.equal((await worker.fetch(new Request("https://relay.example.invalid/admin/reports", { method: "POST", headers: { authorization: "Bearer the-developer-token" } }), env)).status, 405);
+  });
+});

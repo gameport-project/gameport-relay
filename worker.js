@@ -1,11 +1,15 @@
 // The relay between GamePort and the compatibility file: it takes the verdict a player gave about a game ("it worked" / "it did not"),
 // keeps one vote per player and per game in a small database, and publishes the totals. It stores no name, no address, no log of who sent what.
-// See README.md.
+// After "it did not work" the app also sends a technical report (a zip, already redacted by the app); the relay keeps the latest one per player
+// and per game for 30 days, and only the developer, with a secret token, can read them. See README.md.
 
 // "offline_only": the game works, but only without the network (its online or multiplayer part does not).
 const VERDICTS = new Set(["works", "offline_only", "fails"]);
 const DEVICES = new Set(["quest", "pico", "phone", "tablet", "other"]);
 const MAX_BODY_BYTES = 1024;
+// A report is a zip of text; a row of the database holds 2 MB at most, and the zip is stored as base64 (a third larger).
+const MAX_REPORT_BYTES = 1_000_000;
+const REPORT_DAYS = 30;
 const MAX_APP_ID = 2_000_000_000;
 
 /** Checks a message from the app. Returns {vote} with only the known fields, or {error}. Anything else is refused, never repaired. */
@@ -33,13 +37,48 @@ export async function voterHash(voter, salt) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 12);
 }
 
+/** Checks the facts that come with a report, in the address. Returns {meta} or {error}. */
+export function validateReportMeta(params) {
+  const appId = Number(params.get("appId"));
+  if (!Number.isInteger(appId) || appId < 1 || appId > MAX_APP_ID) return { error: "bad appId" };
+  const app = params.get("app");
+  if (typeof app !== "string" || !/^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(app)) return { error: "bad app version" };
+  const device = params.get("device");
+  if (!DEVICES.has(device)) return { error: "bad device" };
+  const voter = params.get("voter");
+  if (typeof voter !== "string" || !/^[0-9a-f]{32}$/.test(voter)) return { error: "bad voter" };
+  return { meta: { appId, app, device, voter } };
+}
+
+/** A zip starts with "PK\x03\x04": anything else is not a report. */
+export function looksLikeZip(bytes) {
+  return bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+}
+
+function toBase64(bytes) {
+  let text = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(text);
+}
+
+function fromBase64(text) {
+  const raw = atob(text);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return bytes;
+}
+
 // The routes and the table each one reads and writes. The names of the tables come from here and from nowhere else, never from a message.
 const ROUTES = {
   "/vote": { table: "votes", write: true },
   "/summary": { table: "votes", write: false },
   "/test/vote": { table: "votes_test", write: true },
   "/test/summary": { table: "votes_test", write: false },
+  "/report": { table: "reports", report: true },
+  "/test/report": { table: "reports_test", report: true },
 };
+// What only the developer reads: the list of reports and each report. The route says which table (the real one or the test one).
+const ADMIN = { "/admin/reports": "reports", "/admin/test/reports": "reports_test" };
 
 const upsert = (table) => `INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT (app_id, voter) DO UPDATE SET verdict = excluded.verdict, app = excluded.app, game = excluded.game, device = excluded.device, offline = excluded.offline, updated = excluded.updated`;
@@ -77,6 +116,54 @@ async function vote(request, env, table) {
   return reply(204);
 }
 
+async function report(request, env, table) {
+  if (env.LIMITER) {
+    const { success } = await env.LIMITER.limit({ key: `report:${request.headers.get("CF-Connecting-IP") ?? "unknown"}` });
+    if (!success) return reply(429, { error: "too many reports" });
+  }
+  const { meta, error } = validateReportMeta(new URL(request.url).searchParams);
+  if (error) return reply(400, { error });
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.length > MAX_REPORT_BYTES) return reply(413, { error: "too large" });
+  if (!looksLikeZip(bytes)) return reply(400, { error: "not a zip" });
+  const voter = await voterHash(meta.voter, env.VOTER_SALT);
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const oldest = new Date(now.getTime() - REPORT_DAYS * 86_400_000).toISOString().slice(0, 10);
+  try {
+    await env.DB.prepare(`INSERT INTO ${table} (app_id, voter, app, device, size, data, updated) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (app_id, voter) DO UPDATE SET app = excluded.app, device = excluded.device, size = excluded.size, data = excluded.data, updated = excluded.updated`)
+      .bind(meta.appId, voter, meta.app, meta.device, bytes.length, toBase64(bytes), today).run();
+    await env.DB.prepare(`DELETE FROM ${table} WHERE updated < ?`).bind(oldest).run();
+  } catch {
+    return reply(500, { error: "not saved" });
+  }
+  return reply(204);
+}
+
+/** True when the request carries the developer's token. No token set in the relay means nobody can read. */
+async function isDeveloper(request, env) {
+  const given = request.headers.get("authorization") ?? "";
+  if (!env.ADMIN_TOKEN || !given.startsWith("Bearer ")) return false;
+  const [a, b] = await Promise.all([given.slice(7), env.ADMIN_TOKEN].map(async (t) => new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))));
+  return a.every((byte, i) => byte === b[i]);
+}
+
+async function admin(request, env, table, id) {
+  if (!(await isDeveloper(request, env))) return reply(404, { error: "not found" });
+  try {
+    if (id === undefined) {
+      const rows = (await env.DB.prepare(`SELECT id, app_id AS appId, app, device, size, updated FROM ${table} ORDER BY updated DESC, id DESC`).all()).results;
+      return reply(200, { reports: rows });
+    }
+    const [row] = (await env.DB.prepare(`SELECT app_id AS appId, data FROM ${table} WHERE id = ?`).bind(id).all()).results;
+    if (!row) return reply(404, { error: "not found" });
+    return new Response(fromBase64(row.data), { status: 200, headers: { "content-type": "application/zip", "content-disposition": `attachment; filename="gameport-report-${row.appId}-${id}.zip"` } });
+  } catch {
+    return reply(500, { error: "not read" });
+  }
+}
+
 /** The totals per game, nothing about any player. The compatibility file is built from this. */
 async function summary(env, table) {
   let rows;
@@ -101,9 +188,19 @@ async function summary(env, table) {
 
 export default {
   async fetch(request, env) {
-    const route = ROUTES[new URL(request.url).pathname];
+    const path = new URL(request.url).pathname;
+    const developerRoute = Object.keys(ADMIN).find((base) => path === base || path.startsWith(`${base}/`));
+    if (developerRoute) {
+      if (!env.DB) return reply(500, { error: "relay not configured" });
+      if (request.method !== "GET") return reply(405, { error: "use GET" });
+      const rest = path.slice(developerRoute.length + 1);
+      if (rest !== "" && !/^\d{1,9}$/.test(rest)) return reply(404, { error: "not found" });
+      return admin(request, env, ADMIN[developerRoute], rest === "" ? undefined : Number(rest));
+    }
+    const route = ROUTES[path];
     if (!route) return reply(404, { error: "not found" });
     if (!env.DB) return reply(500, { error: "relay not configured" });
+    if (route.report) return request.method === "POST" ? report(request, env, route.table) : reply(405, { error: "use POST" });
     if (!route.write) return request.method === "GET" ? summary(env, route.table) : reply(405, { error: "use GET" });
     return request.method === "POST" ? vote(request, env, route.table) : reply(405, { error: "use POST" });
   },
