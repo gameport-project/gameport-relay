@@ -61,7 +61,23 @@ From this folder, with Node 20 or later:
 4. **Set the developer's token** for reading the reports, any long random text, typed when asked and never written in a file: `npx wrangler secret put ADMIN_TOKEN`.
 5. **Deploy.** `npx wrangler deploy`. The address is `https://gameport-relay.<account subdomain>.workers.dev`; it must contain nothing personal.
 
-A database made earlier needs the migrations run once, in order, from this folder: `npx wrangler d1 execute gameport-votes --remote --file=migrations/0001_offline.sql` (the `offline` column), then `--file=migrations/0002_offline_only.sql` (the answer "offline only"), then `--file=migrations/0003_reports.sql` (the tables of the reports), then `npx wrangler secret put ADMIN_TOKEN` and `npx wrangler deploy`.
+A database made earlier needs the migrations run once, in order, from this folder: `npx wrangler d1 execute gameport-votes --remote --file=migrations/0001_offline.sql` (the `offline` column), then `--file=migrations/0002_offline_only.sql` (the answer "offline only"), then `--file=migrations/0003_reports.sql` (the tables of the reports), then `--file=migrations/0004_fixed.sql` (the columns of the votes marked as fixed), then `npx wrangler secret put ADMIN_TOKEN` and `npx wrangler deploy`.
+
+## The console
+
+A page to see, add, change, mark as fixed and remove the votes, for the real totals and for the test ones, from one place: `https://<the relay>/console`. It is for the developer alone.
+
+- **Who may come in.** Cloudflare Access stands in front of `/console` and lets only the developer's address through (a one-time code sent by e-mail, or a sign-in with an account). The relay does not rely on that alone: every request must carry the signed token Access adds, and the relay checks its signature, its application, its issuer, its end date and the address it was made for. Without the three secrets below, every route of the console answers 404 as if it did not exist.
+- **What it does.** Search a game, see its votes (the player as a short hash, the device, the answer, the version of GamePort, the day, and whether it counts), add a vote (it is stored as a vote of its own, with the version `admin`), change any vote, mark one as fixed or count it again, delete one. A vote marked fixed gets the day in `fixed` and, if given, a free text in `fixed_in` (a version of GamePort): it is no longer counted in the totals. A player who votes again for the same game replaces their vote, which counts again.
+- **Test and production.** A switch at the top, a banner in blue for the test votes and in red for the real ones; the page opens on test, and every change in production asks first.
+- **Writes** must come from the page itself (same origin, a header no other site can add, a JSON body), and each change is written in the relay's logs (`console` with the game, the player's hash, before and after).
+
+To set it up, once:
+
+1. `npx wrangler d1 export gameport-votes --remote --output votes.sql` (a copy of the votes, to be safe), then `npx wrangler d1 execute gameport-votes --remote --file=migrations/0004_fixed.sql` (adds two empty columns, `fixed` and `fixed_in`, and touches nothing else).
+2. In Cloudflare, Zero Trust, Access, Applications: add a self-hosted application on the relay's address with the path `console`, and a policy that allows only the developer's e-mail address. Note the application's audience tag and the team name.
+3. Set the three secrets, typed when asked and never written in a file: `npx wrangler secret put ACCESS_TEAM` (the team name, the part before `.cloudflareaccess.com`), `npx wrangler secret put ACCESS_AUD` (the audience tag), `npx wrangler secret put ADMIN_EMAIL` (the developer's address).
+4. `npx wrangler deploy`.
 
 Back up the votes at any time with `npx wrangler d1 export gameport-votes --remote --output votes.sql`.
 

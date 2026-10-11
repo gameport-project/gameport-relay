@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --experimental-sqlite --no-warnings --test worker.test.js"
+    "test": "node --experimental-sqlite --no-warnings --test worker.test.js console.test.js"
   }
 }

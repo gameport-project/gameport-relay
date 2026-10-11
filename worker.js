@@ -3,6 +3,8 @@
 // After "it did not work" the app also sends a technical report (a zip, already redacted by the app); the relay keeps the latest one per player
 // and per game for 30 days, and only the developer, with a secret token, can read them. See README.md.
 
+import { handleConsole } from "./console.js";
+
 // "offline_only": the game works, but only without the network (its online or multiplayer part does not).
 const VERDICTS = new Set(["works", "offline_only", "fails"]);
 const DEVICES = new Set(["quest", "pico", "phone", "tablet", "other"]);
@@ -81,8 +83,8 @@ const ROUTES = {
 const ADMIN = { "/admin/reports": "reports", "/admin/test/reports": "reports_test" };
 
 const upsert = (table) => `INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  ON CONFLICT (app_id, voter) DO UPDATE SET verdict = excluded.verdict, app = excluded.app, game = excluded.game, device = excluded.device, offline = excluded.offline, updated = excluded.updated`;
-const summaryQuery = (table) => `SELECT app_id AS appId, device, SUM(verdict = 'works') AS works, SUM(verdict = 'offline_only') AS offlineOnly, SUM(verdict = 'fails') AS fails, SUM(verdict = 'works' AND offline = 1) AS worksOffline FROM ${table} GROUP BY app_id, device ORDER BY app_id, device`;
+  ON CONFLICT (app_id, voter) DO UPDATE SET verdict = excluded.verdict, app = excluded.app, game = excluded.game, device = excluded.device, offline = excluded.offline, updated = excluded.updated, fixed = NULL, fixed_in = NULL`;
+const summaryQuery = (table) => `SELECT app_id AS appId, device, SUM(verdict = 'works') AS works, SUM(verdict = 'offline_only') AS offlineOnly, SUM(verdict = 'fails') AS fails, SUM(verdict = 'works' AND offline = 1) AS worksOffline FROM ${table} WHERE fixed IS NULL GROUP BY app_id, device ORDER BY app_id, device`;
 
 function reply(status, body, headers = {}) {
   const json = body !== undefined && typeof body === "object";
@@ -189,6 +191,9 @@ async function summary(env, table) {
 export default {
   async fetch(request, env) {
     const path = new URL(request.url).pathname;
+    // The developer's console answers its own routes (see console.js); to everyone else they do not exist.
+    const consoleAnswer = await handleConsole(request, env);
+    if (consoleAnswer) return consoleAnswer;
     const developerRoute = Object.keys(ADMIN).find((base) => path === base || path.startsWith(`${base}/`));
     if (developerRoute) {
       if (!env.DB) return reply(500, { error: "relay not configured" });

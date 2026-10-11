@@ -156,8 +156,8 @@ describe("the relay", () => {
   });
 
   it("counts as worked offline only a vote that says it worked, even if a row says otherwise", async () => {
-    db.prepare("INSERT INTO votes VALUES (9, 'aaaaaaaaaaaa', 'fails', '0.7.2', NULL, 'quest', 1, '2026-10-08')").run();
-    db.prepare("INSERT INTO votes VALUES (9, 'bbbbbbbbbbbb', 'works', '0.7.2', NULL, 'quest', 1, '2026-10-08')").run();
+    db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (9, 'aaaaaaaaaaaa', 'fails', '0.7.2', NULL, 'quest', 1, '2026-10-08')").run();
+    db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (9, 'bbbbbbbbbbbb', 'works', '0.7.2', NULL, 'quest', 1, '2026-10-08')").run();
     assert.deepEqual(await (await worker.fetch(get(), env)).json(), { v: 1, games: [{ appId: 9, works: 1, offlineOnly: 0, fails: 1, worksOffline: 1, devices: { quest: { works: 1, offlineOnly: 0, fails: 1, worksOffline: 1 } } }] });
   });
 
@@ -238,8 +238,8 @@ describe("the relay", () => {
   });
 
   it("the database itself refuses a verdict that is not one of the three", () => {
-    assert.throws(() => db.prepare("INSERT INTO votes VALUES (1, 'x', 'maybe', '0.7.2', NULL, 'quest', 0, '2026-10-08')").run());
-    assert.doesNotThrow(() => db.prepare("INSERT INTO votes VALUES (1, 'x', 'offline_only', '0.7.2', NULL, 'quest', 0, '2026-10-08')").run());
+    assert.throws(() => db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (1, 'x', 'maybe', '0.7.2', NULL, 'quest', 0, '2026-10-08')").run());
+    assert.doesNotThrow(() => db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (1, 'x', 'offline_only', '0.7.2', NULL, 'quest', 0, '2026-10-08')").run());
   });
 
   it("answers 500 without repeating what the database said, when it fails", async () => {
@@ -305,11 +305,12 @@ describe("the test routes", () => {
 describe("the migration of a database made before the offline column", () => {
   it("adds the column to both tables, keeps the votes, and counts them as not offline", async () => {
     const db = new DatabaseSync(":memory:");
-    const old = readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*offline INTEGER.*\n/gm, "").replaceAll("'works', 'offline_only', 'fails'", "'works', 'fails'");
-    assert.ok(!old.includes("offline"));
+    const old = readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*offline INTEGER.*\n/gm, "").replaceAll(/^\s*fixed(_in)? +TEXT.*\n/gm, "").replaceAll("'works', 'offline_only', 'fails'", "'works', 'fails'");
+    assert.ok(!old.includes("offline") && !old.includes("fixed"));
     db.exec(old);
-    db.prepare("INSERT INTO votes VALUES (1, 'aaaaaaaaaaaa', 'works', '0.7.2', NULL, 'quest', '2026-10-08')").run();
+    db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, updated) VALUES (1, 'aaaaaaaaaaaa', 'works', '0.7.2', NULL, 'quest', '2026-10-08')").run();
     db.exec(readFileSync(new URL("./migrations/0001_offline.sql", import.meta.url), "utf8"));
+    db.exec(readFileSync(new URL("./migrations/0004_fixed.sql", import.meta.url), "utf8"));
     const env = { DB: d1(db), VOTER_SALT: "salt" };
     assert.deepEqual(await (await worker.fetch(get(), env)).json(), { v: 1, games: [{ appId: 1, works: 1, offlineOnly: 0, fails: 0, worksOffline: 0, devices: { quest: { works: 1, offlineOnly: 0, fails: 0, worksOffline: 0 } } }] });
     assert.equal((await worker.fetch(post(goodMessage({ offline: true }), "/test/vote"), env)).status, 204);
@@ -321,23 +322,24 @@ describe("the migration that allows the answer offline only", () => {
   it("rebuilds both tables, keeps every vote, and then accepts the new answer and still refuses the others", async () => {
     const db = new DatabaseSync(":memory:");
     // The database as it was after the offline column, before the third answer.
-    const schema = readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll("'works', 'offline_only', 'fails'", "'works', 'fails'");
-    assert.ok(!schema.includes("offline_only"));
+    const schema = readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*fixed(_in)? +TEXT.*\n/gm, "").replaceAll("'works', 'offline_only', 'fails'", "'works', 'fails'");
+    assert.ok(!schema.includes("offline_only") && !schema.includes("fixed"));
     db.exec(schema);
-    db.prepare("INSERT INTO votes VALUES (1, 'aaaaaaaaaaaa', 'works', '0.7.2', 'b1', 'quest', 1, '2026-10-08')").run();
-    db.prepare("INSERT INTO votes VALUES (1, 'bbbbbbbbbbbb', 'fails', '0.7.2', NULL, 'pico', 0, '2026-10-08')").run();
-    db.prepare("INSERT INTO votes_test VALUES (2, 'cccccccccccc', 'works', '0.7.2', NULL, 'phone', 0, '2026-10-08')").run();
-    assert.throws(() => db.prepare("INSERT INTO votes VALUES (1, 'x', 'offline_only', '0.7.2', NULL, 'quest', 0, '2026-10-08')").run());
+    db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (1, 'aaaaaaaaaaaa', 'works', '0.7.2', 'b1', 'quest', 1, '2026-10-08')").run();
+    db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (1, 'bbbbbbbbbbbb', 'fails', '0.7.2', NULL, 'pico', 0, '2026-10-08')").run();
+    db.prepare("INSERT INTO votes_test (app_id, voter, verdict, app, game, device, offline, updated) VALUES (2, 'cccccccccccc', 'works', '0.7.2', NULL, 'phone', 0, '2026-10-08')").run();
+    assert.throws(() => db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (1, 'x', 'offline_only', '0.7.2', NULL, 'quest', 0, '2026-10-08')").run());
     db.exec(readFileSync(new URL("./migrations/0002_offline_only.sql", import.meta.url), "utf8"));
+    db.exec(readFileSync(new URL("./migrations/0004_fixed.sql", import.meta.url), "utf8"));
     assert.deepEqual(db.prepare("SELECT * FROM votes ORDER BY voter").all().map((row) => ({ ...row })), [
-      { app_id: 1, voter: "aaaaaaaaaaaa", verdict: "works", app: "0.7.2", game: "b1", device: "quest", offline: 1, updated: "2026-10-08" },
-      { app_id: 1, voter: "bbbbbbbbbbbb", verdict: "fails", app: "0.7.2", game: null, device: "pico", offline: 0, updated: "2026-10-08" },
+      { app_id: 1, voter: "aaaaaaaaaaaa", verdict: "works", app: "0.7.2", game: "b1", device: "quest", offline: 1, updated: "2026-10-08", fixed: null, fixed_in: null },
+      { app_id: 1, voter: "bbbbbbbbbbbb", verdict: "fails", app: "0.7.2", game: null, device: "pico", offline: 0, updated: "2026-10-08", fixed: null, fixed_in: null },
     ]);
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM votes_test").get().n, 1);
     const env = { DB: d1(db), VOTER_SALT: "salt" };
     assert.equal((await worker.fetch(post(goodMessage({ verdict: "offline_only" })), env)).status, 204);
     assert.equal((await worker.fetch(post(goodMessage({ verdict: "offline_only" }), "/test/vote"), env)).status, 204);
-    assert.throws(() => db.prepare("INSERT INTO votes VALUES (9, 'x', 'maybe', '0.7.2', NULL, 'quest', 0, '2026-10-08')").run());
+    assert.throws(() => db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (9, 'x', 'maybe', '0.7.2', NULL, 'quest', 0, '2026-10-08')").run());
     // Voting again still replaces: the key of the table is kept.
     assert.equal((await worker.fetch(post(goodMessage({ verdict: "works" })), env)).status, 204);
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM votes WHERE app_id = 1125240").get().n, 1);
