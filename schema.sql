@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS reports (
   size    INTEGER NOT NULL,  -- bytes of the zip
   data    TEXT    NOT NULL,  -- the zip, base64
   updated TEXT    NOT NULL,  -- the day, YYYY-MM-DD
+  handled TEXT,              -- the day the developer dealt with it; empty while it waits. A new report from the same player starts again as not handled
   UNIQUE (app_id, voter)
 );
 
@@ -52,5 +53,6 @@ CREATE TABLE IF NOT EXISTS reports_test (
   size    INTEGER NOT NULL,
   data    TEXT    NOT NULL,
   updated TEXT    NOT NULL,
+  handled TEXT,
   UNIQUE (app_id, voter)
 );

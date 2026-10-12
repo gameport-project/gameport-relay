@@ -447,3 +447,94 @@ describe("the name of an app that is not in the catalog", () => {
     } finally { restore(); }
   });
 });
+
+describe("the reports that wait, and the answer each goes with", () => {
+  const ZIP = Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]);
+  const report = (table, appId, voter, day, handled = null) =>
+    db.prepare(`INSERT INTO ${table} (app_id, voter, app, device, size, data, updated, handled) VALUES (?, ?, '0.8.1', 'quest', ?, ?, ?, ?)`).run(appId, voter, ZIP.length, ZIP.toString("base64"), day, handled);
+  const vote = (table, appId, voter, verdict, offline = 0) =>
+    db.prepare(`INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated) VALUES (?, ?, ?, '0.8.1', NULL, 'quest', ?, '2026-10-12')`).run(appId, voter, verdict, offline);
+  const list = async (query = "env=prod") => (await ask(`/console/api/reports?${query}`)).json();
+
+  it("tells for each report what the same player answered for that game, and null when there is no vote", async () => {
+    report("reports", 5, "aaaaaaaaaaaa", "2026-10-12");
+    report("reports", 5, "bbbbbbbbbbbb", "2026-10-11");
+    report("reports", 6, "cccccccccccc", "2026-10-10");
+    vote("votes", 5, "aaaaaaaaaaaa", "fails");
+    vote("votes", 5, "bbbbbbbbbbbb", "works", 1);
+    vote("votes", 6, "dddddddddddd", "fails");
+    const { reports } = await list();
+    assert.deepEqual(reports.map((r) => [r.appId, r.verdict, r.offline]), [[5, "fails", false], [5, "works", true], [6, null, null]]);
+  });
+
+  it("matches the vote of the same set only: a test report does not read a real vote", async () => {
+    report("reports_test", 5, "aaaaaaaaaaaa", "2026-10-12");
+    vote("votes", 5, "aaaaaaaaaaaa", "fails");
+    vote("votes_test", 5, "aaaaaaaaaaaa", "works");
+    assert.equal((await list("env=test")).reports[0].verdict, "works");
+  });
+
+  it("puts the reports that wait first, counts them all, and shows the day of the others", async () => {
+    report("reports", 5, "aaaaaaaaaaaa", "2026-10-12", "2026-10-12");
+    report("reports", 6, "bbbbbbbbbbbb", "2026-10-09");
+    report("reports", 7, "cccccccccccc", "2026-10-11");
+    const answer = await list();
+    assert.equal(answer.unhandled, 2);
+    assert.deepEqual(answer.reports.map((r) => [r.appId, r.handled]), [[7, null], [6, null], [5, "2026-10-12"]]);
+    assert.equal((await list("env=prod&appId=5")).unhandled, 2, "the count is of the set, not of the game");
+    assert.equal((await list("env=test")).unhandled, 0);
+  });
+
+  it("marks a report as handled, keeps the first day, and puts it back to waiting", async () => {
+    report("reports", 5, "aaaaaaaaaaaa", "2026-10-12");
+    const today = new Date().toISOString().slice(0, 10);
+    const id = (await list()).reports[0].id;
+    const handle = (handled) => ask("/console/api/report-handled", { method: "POST", body: { env: "prod", id, handled } });
+    assert.equal((await handle(true)).status, 200);
+    assert.equal((await list()).reports[0].handled, today);
+    db.prepare("UPDATE reports SET handled = '2026-01-02'").run();
+    await handle(true);
+    assert.equal((await list()).reports[0].handled, "2026-01-02");
+    await handle(false);
+    const after = await list();
+    assert.equal(after.reports[0].handled, null);
+    assert.equal(after.unhandled, 1);
+  });
+
+  it("marks a report of the set that was asked, and refuses what is not exactly known", async () => {
+    report("reports", 5, "aaaaaaaaaaaa", "2026-10-12");
+    report("reports_test", 5, "aaaaaaaaaaaa", "2026-10-12");
+    assert.equal((await ask("/console/api/report-handled", { method: "POST", body: { env: "test", id: 1, handled: true } })).status, 200);
+    assert.deepEqual([rows("reports")[0].handled, rows("reports_test")[0].handled === null], [null, false]);
+    const bad = [{ env: "prod", id: 0, handled: true }, { env: "prod", id: "1", handled: true }, { env: "prod", id: 1.5, handled: true }, { env: "prod", id: 1, handled: "yes" }, { env: "prod", id: 1 }, { env: "reports", id: 1, handled: true }, { id: 1, handled: true }];
+    for (const body of bad) assert.equal((await ask("/console/api/report-handled", { method: "POST", body })).status, 400, JSON.stringify(body));
+    assert.equal((await ask("/console/api/report-handled", { method: "POST", body: { env: "prod", id: 99, handled: true } })).status, 404);
+    assert.equal(rows("reports")[0].handled, null);
+  });
+
+  it("needs the token and the page, like every write", async () => {
+    report("reports", 5, "aaaaaaaaaaaa", "2026-10-12");
+    const body = { env: "prod", id: 1, handled: true };
+    assert.equal((await ask("/console/api/report-handled", { method: "POST", body, jwt: null })).status, 404);
+    assert.equal((await ask("/console/api/report-handled", { method: "POST", body, page: false })).status, 403);
+    assert.equal(rows("reports")[0].handled, null);
+  });
+
+  it("starts a player's new report again as waiting", async () => {
+    const send = () => worker.fetch(new Request(`${ORIGIN}/report?appId=5&app=0.8.1&device=quest&voter=${VOTER}`, { method: "POST", body: ZIP }), env);
+    await send();
+    const { reports } = await list();
+    await ask("/console/api/report-handled", { method: "POST", body: { env: "prod", id: reports[0].id, handled: true } });
+    assert.notEqual((await list()).reports[0].handled, null);
+    await send();
+    assert.equal((await list()).reports[0].handled, null);
+  });
+
+  it("adds the column to a database made before it, and keeps its reports", () => {
+    const old = new DatabaseSync(":memory:");
+    old.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*handled +TEXT.*\n/gm, ""));
+    old.prepare("INSERT INTO reports (app_id, voter, app, device, size, data, updated) VALUES (1, 'aaaaaaaaaaaa', '0.7.4', 'quest', 4, 'UEsD', '2026-10-08')").run();
+    old.exec(readFileSync(new URL("./migrations/0005_reports_handled.sql", import.meta.url), "utf8"));
+    assert.deepEqual({ ...old.prepare("SELECT app_id, voter, handled FROM reports").get() }, { app_id: 1, voter: "aaaaaaaaaaaa", handled: null });
+  });
+});

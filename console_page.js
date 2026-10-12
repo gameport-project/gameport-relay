@@ -21,7 +21,7 @@ button, input, select { font:inherit; color:inherit; }
 .switch { display:flex; gap:4px; padding:3px; border-radius:999px; background:rgba(0,0,0,.28); }
 .switch button { border:0; background:none; cursor:pointer; padding:7px 16px; border-radius:999px; font-weight:700; color:#fff; opacity:.8; }
 .switch button[aria-pressed="true"] { background:#fff; color:#111; opacity:1; }
-main { display:grid; grid-template-columns:minmax(260px,340px) 1fr; gap:20px; padding:20px; max-width:1280px; margin:0 auto; }
+main { display:grid; grid-template-columns:minmax(280px,360px) minmax(0,1fr); gap:20px; padding:20px 28px 32px; width:100%; }
 @media (max-width:820px) { main { grid-template-columns:1fr; } }
 .panel { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; }
 h2 { margin:0 0 12px; font-size:17px; }
@@ -67,6 +67,13 @@ td { white-space:nowrap; }
 .actions { display:flex; gap:6px; flex-wrap:nowrap; }
 .scroll { overflow-x:auto; }
 .gap { margin-top:24px; }
+.pill { display:inline-flex; align-items:center; gap:6px; padding:2px 10px; border-radius:999px; font-size:13px; font-weight:600; background:rgba(255,255,255,.08); border:1px solid var(--line); }
+.pill.v-works { color:#4cc38a; } .pill.v-offline_only { color:#f0b24a; } .pill.v-fails { color:#ef6b6b; } .pill.v-none { color:var(--muted); font-weight:500; }
+.todo { display:inline-flex; align-items:center; gap:6px; color:var(--warn); font-weight:600; font-size:13px; }
+.todo::before { content:""; width:9px; height:9px; border-radius:50%; background:var(--warn); }
+tr.waiting td:first-child { border-left:4px solid var(--warn); }
+.badge { display:inline-block; min-width:20px; padding:1px 7px; margin-left:8px; border-radius:999px; background:var(--warn); color:#10131a; font-size:12px; font-weight:800; text-align:center; }
+.game .wait { width:10px; height:10px; border-radius:50%; background:var(--warn); flex:none; }
 a.btn { display:inline-flex; align-items:center; text-decoration:none; }
 .state { font-size:13px; color:var(--warn); }
 .toast { position:fixed; right:20px; bottom:20px; padding:10px 16px; border-radius:12px; background:#1f2633; border:1px solid var(--line); opacity:0; transition:opacity .2s; pointer-events:none; }
@@ -87,7 +94,7 @@ a.btn { display:inline-flex; align-items:center; text-decoration:none; }
     <h2>Games</h2>
     <input type="search" id="q" placeholder="Search a game" autocomplete="off" aria-label="Search a game">
     <button type="button" class="btn only" id="only" aria-pressed="false">Only games with votes</button>
-    <button type="button" class="btn only" id="latest">Latest reports</button>
+    <button type="button" class="btn only" id="latest">Latest reports<span class="badge" id="latest-count" hidden></span></button>
     <div class="games" id="games"></div>
   </section>
   <section class="panel" id="detail"><p class="muted">Pick a game.</p></section>
@@ -98,7 +105,7 @@ a.btn { display:inline-flex; align-items:center; text-decoration:none; }
 var CATALOG = "https://raw.githubusercontent.com/gameport-project/gameport-catalog/main/v1/catalog.json";
 var DEVICES = ["quest", "pico", "phone", "tablet", "other"];
 var VERDICTS = { works: "Works", offline_only: "Offline only", fails: "Does not work" };
-var state = { env: "test", games: [], current: null, votes: [], counts: {}, onlyVoted: false, view: "", extra: {} };
+var state = { env: "test", games: [], current: null, votes: [], counts: {}, onlyVoted: false, view: "", extra: {}, unhandled: 0, waiting: {} };
 
 function el(tag, attrs, children) {
   var node = document.createElement(tag);
@@ -145,6 +152,7 @@ function setEnv(env) {
   document.getElementById("env-note").textContent = env === "prod"
     ? "The real votes: what the app and the site show. Every change is immediate."
     : "The votes of the test builds: nothing here reaches the real totals.";
+  loadWaiting();
   loadCounts().then(function () {
     drawGames();
     if (state.view === "reports") showLatestReports();
@@ -183,6 +191,19 @@ function allGames() {
   return state.games.concat(Object.keys(state.extra).map(function (id) { return state.extra[id]; })).sort(function (a, b) { return a.name.localeCompare(b.name); });
 }
 
+/** How many reports wait in this set, and for which games: the badge of the button and the dots of the list. */
+function loadWaiting() {
+  return call("/console/api/reports?env=" + state.env).then(function (data) {
+    state.unhandled = data.unhandled;
+    state.waiting = {};
+    data.reports.forEach(function (r) { if (!r.handled) state.waiting[r.appId] = (state.waiting[r.appId] || 0) + 1; });
+    var badge = document.getElementById("latest-count");
+    badge.textContent = String(state.unhandled);
+    badge.hidden = !state.unhandled;
+    drawGames();
+  }).catch(function () {});
+}
+
 /** The answer most votes of a game give: the colour of its badge. When two answers are equal, the more careful one wins. */
 function majority(c) {
   if (c.fails >= c.works && c.fails >= c.offline_only) return "fails";
@@ -208,6 +229,7 @@ function drawGames() {
     box.appendChild(el("button", { type: "button", class: "game", "aria-pressed": String(state.current && state.current.appid === g.appid), onclick: function () { state.current = g; state.view = "game"; drawGames(); loadVotes(); } }, [
       thumb,
       el("span", { class: "t" }, [el("b", { text: g.name }), el("small", { text: g.extra ? (g.type || "not in the catalog") : (g.vr ? "VR" : "Flat") + (g.installable ? "" : " · soon") })]),
+      state.waiting[g.appid] ? el("span", { class: "wait", title: state.waiting[g.appid] + " report(s) to handle" }) : null,
       n ? el("span", { class: "n n-" + majority(n), text: String(n.total) }) : null,
     ]));
   });
@@ -229,9 +251,18 @@ function select(options, value, labels) {
 
 function size(bytes) { return bytes < 1024 ? bytes + " B" : Math.round(bytes / 1024) + " KB"; }
 
-/** The reports as a table: each one has a link that saves the zip. A game name is shown when the reports are of several games. */
-function reportsTable(reports, withGame) {
-  var head = (withGame ? ["Game"] : []).concat(["Device", "GamePort", "Day", "Size", ""]);
+var ANSWERS = { works: "Works", offline_only: "Works offline only", fails: "Does not work" };
+
+/** What the player answered for the game the report is about: the colour says which answer, "no vote" when there is none. */
+function answerPill(r) {
+  if (!r.verdict) return el("span", { class: "pill v-none", text: "No vote" });
+  var text = ANSWERS[r.verdict] + (r.verdict === "works" && r.offline ? " (offline mode)" : "");
+  return el("span", { class: "pill v-" + r.verdict, text: text });
+}
+
+/** The reports as a table. Each has what the player answered, whether it waits or was handled, a link that saves the zip and a button to mark it. A game name is shown when the reports are of several games. */
+function reportsTable(reports, withGame, refresh) {
+  var head = (withGame ? ["Game"] : []).concat(["Device", "GamePort", "Day", "Answer", "State", "Size", ""]);
   var table = el("table", {}, [el("thead", {}, [el("tr", {}, head.map(function (h) { return el("th", { text: h }); }))])]);
   var body = el("tbody");
   reports.forEach(function (r) {
@@ -245,11 +276,19 @@ function reportsTable(reports, withGame) {
     }
     // A game whose name is still being asked: the cell is written when the answer comes.
     if (game && game.pending) game.pending.then(function () { nameCell.textContent = game.name; });
+    var toggle = el("button", { type: "button", class: "btn", text: r.handled ? "Reopen" : "Mark handled", onclick: function () {
+      call("/console/api/report-handled", { id: r.id, handled: !r.handled })
+        .then(function () { toast(r.handled ? "Back to waiting" : "Marked handled"); loadWaiting(); refresh(); }).catch(function (e) { toast(e.message, true); });
+    } });
+    var download = el("a", { class: "btn fill", href: "/console/api/report?env=" + state.env + "&id=" + r.id, download: "gameport-report-" + r.appId + "-" + r.id + ".zip", text: "Download" });
     var cells = (withGame ? [nameCell] : []).concat([
-      el("td", { text: r.device }), el("td", { text: r.app }), el("td", { text: r.updated }), el("td", { text: size(r.size) }),
-      el("td", {}, [el("a", { class: "btn fill", href: "/console/api/report?env=" + state.env + "&id=" + r.id, download: "gameport-report-" + r.appId + "-" + r.id + ".zip", text: "Download" })]),
+      el("td", { text: r.device }), el("td", { text: r.app }), el("td", { text: r.updated }),
+      el("td", {}, [answerPill(r)]),
+      el("td", {}, [r.handled ? el("span", { class: "muted", text: "Handled " + r.handled }) : el("span", { class: "todo", text: "To handle" })]),
+      el("td", { text: size(r.size) }),
+      el("td", {}, [el("div", { class: "actions" }, [download, toggle])]),
     ]);
-    body.appendChild(el("tr", {}, cells));
+    body.appendChild(el("tr", { class: r.handled ? "" : "waiting" }, cells));
   });
   table.appendChild(body);
   return el("div", { class: "scroll" }, [table]);
@@ -268,7 +307,7 @@ function showLatestReports() {
   call("/console/api/reports?env=" + state.env).then(function (data) {
     // Only the last request draws: a switch of environment, or a second click, must not add a second table.
     if (mine !== reportsAsked || state.view !== "reports") return;
-    panel.appendChild(data.reports.length ? reportsTable(data.reports, true) : el("p", { class: "muted", text: "No report." }));
+    panel.appendChild(data.reports.length ? reportsTable(data.reports, true, showLatestReports) : el("p", { class: "muted", text: "No report." }));
   }).catch(function (e) { toast(e.message, true); });
 }
 
@@ -317,7 +356,7 @@ function drawDetail() {
   call("/console/api/reports?env=" + state.env + "&appId=" + g.appid).then(function (data) {
     if (!data.reports.length) return;
     reports.appendChild(el("h2", { text: "Reports of this game" }));
-    reports.appendChild(reportsTable(data.reports, false));
+    reports.appendChild(reportsTable(data.reports, false, drawDetail));
   }).catch(function () {});
   if (!state.votes.length) { panel.appendChild(el("p", { class: "muted", text: "No vote for this game." })); panel.appendChild(reports); return; }
   var table = el("table", {}, [el("thead", {}, [el("tr", {}, ["Player", "Device", "Answer", "Offline", "GamePort", "Day", "State", ""].map(function (h) { return el("th", { text: h }); }))])]);
@@ -384,11 +423,12 @@ document.getElementById("only").addEventListener("click", function () {
 
 fetch(CATALOG).then(function (r) { return r.json(); }).then(function (data) {
   state.games = data.apps.slice().sort(function (a, b) { return a.name.localeCompare(b.name); });
-  // An address like #1125240 opens that game, #1125240/prod opens it in production, #voted lists only the games with votes, and #reports shows the latest reports.
+  // An address like #1125240 opens that game, #1125240/prod opens it in production, #voted lists only the games with votes, and #reports (or #reports/prod) shows the latest reports.
   if (location.hash === "#voted") { state.onlyVoted = true; document.getElementById("only").setAttribute("aria-pressed", "true"); }
   var link = location.hash.match(/^#(\\d+)(\\/prod)?$/);
-  setEnv(link && link[2] ? "prod" : "test");
-  if (location.hash === "#reports") showLatestReports();
+  var inReports = location.hash.match(/^#reports(\\/prod)?$/);
+  setEnv((link && link[2]) || (inReports && inReports[1]) ? "prod" : "test");
+  if (inReports) showLatestReports();
   else if (link && !state.games.some(function (g) { return g.appid === Number(link[1]); })) {
     var other = { appid: Number(link[1]), name: "App " + link[1], vr: false, installable: true, extra: true };
     state.extra[other.appid] = other; state.current = other; state.view = "game"; resolveName(other); loadVotes();

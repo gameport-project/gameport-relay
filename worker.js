@@ -134,7 +134,7 @@ async function report(request, env, table) {
   const oldest = new Date(now.getTime() - REPORT_DAYS * 86_400_000).toISOString().slice(0, 10);
   try {
     await env.DB.prepare(`INSERT INTO ${table} (app_id, voter, app, device, size, data, updated) VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT (app_id, voter) DO UPDATE SET app = excluded.app, device = excluded.device, size = excluded.size, data = excluded.data, updated = excluded.updated`)
+      ON CONFLICT (app_id, voter) DO UPDATE SET app = excluded.app, device = excluded.device, size = excluded.size, data = excluded.data, updated = excluded.updated, handled = NULL`)
       .bind(meta.appId, voter, meta.app, meta.device, bytes.length, toBase64(bytes), today).run();
     await env.DB.prepare(`DELETE FROM ${table} WHERE updated < ?`).bind(oldest).run();
   } catch {

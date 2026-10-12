@@ -18,6 +18,8 @@ const MAX_BODY_BYTES = 2048;
 const TABLES = { prod: "votes", test: "votes_test" };
 // The technical reports a player's app sent after "it did not work", for the same two sets.
 const REPORT_TABLES = { prod: "reports", test: "reports_test" };
+// The votes each set of reports goes with: a report and the vote of the same player for the same game share the app and the hashed player.
+const VOTE_OF_REPORTS = { reports: "votes", reports_test: "votes_test" };
 const MAX_REPORTS_LISTED = 200;
 const HEADER = "x-gameport-console";
 
@@ -214,17 +216,39 @@ async function appInfo(url) {
 
 const fromBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 
-/** The reports of a game, or the latest ones of every game when no game is given. Not the zips: those are downloaded one by one. */
+/**
+ * The reports of a game, or the latest ones of every game when no game is given, the ones not handled first. Not the zips: those are downloaded one by one.
+ * Each report carries the answer of the same player for the same game (it may have changed since the report was sent), and the answer is null when the
+ * player has no vote. `unhandled` counts every report still waiting in the set, not only the ones listed.
+ */
 async function listReports(url, env) {
   const table = REPORT_TABLES[url.searchParams.get("env")];
   if (!table) return json(400, { error: "bad env" });
   const given = url.searchParams.get("appId");
   const appId = given === null ? null : Number(given);
   if (appId !== null && !validId(appId)) return json(400, { error: "bad appId" });
-  const where = appId === null ? "" : " WHERE app_id = ?";
-  const statement = env.DB.prepare(`SELECT id, app_id AS appId, app, device, size, updated FROM ${table}${where} ORDER BY updated DESC, id DESC LIMIT ${MAX_REPORTS_LISTED}`);
+  const votes = VOTE_OF_REPORTS[table];
+  const where = appId === null ? "" : " WHERE r.app_id = ?";
+  const statement = env.DB.prepare(
+    `SELECT r.id, r.app_id AS appId, r.app, r.device, r.size, r.updated, r.handled, v.verdict, v.offline FROM ${table} r LEFT JOIN ${votes} v ON v.app_id = r.app_id AND v.voter = r.voter${where} ` +
+    `ORDER BY r.handled IS NOT NULL, r.updated DESC, r.id DESC LIMIT ${MAX_REPORTS_LISTED}`,
+  );
   const rows = (await (appId === null ? statement.all() : statement.bind(appId).all())).results;
-  return json(200, { reports: rows });
+  const [{ n }] = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE handled IS NULL`).all()).results;
+  return json(200, { unhandled: n, reports: rows.map((row) => ({ ...row, verdict: row.verdict ?? null, offline: row.verdict === null || row.verdict === undefined ? null : row.offline === 1 })) });
+}
+
+/** Marks a report as handled (the day), or as waiting again. */
+async function handleReport(message, env, _table, environment) {
+  const table = REPORT_TABLES[environment];
+  if (!Number.isInteger(message.id) || message.id < 1) return json(400, { error: "bad id" });
+  if (typeof message.handled !== "boolean") return json(400, { error: "bad handled" });
+  const [row] = (await env.DB.prepare(`SELECT id, app_id AS appId, handled FROM ${table} WHERE id = ?`).bind(message.id).all()).results;
+  if (!row) return json(404, { error: "no such report" });
+  const day = message.handled ? (row.handled ?? new Date().toISOString().slice(0, 10)) : null;
+  await env.DB.prepare(`UPDATE ${table} SET handled = ? WHERE id = ?`).bind(day, message.id).run();
+  log("report", { env: environment, id: message.id, appId: row.appId, handled: day });
+  return json(200, { ok: true });
 }
 
 /** One report as the zip file it is, to be saved. */
@@ -241,7 +265,7 @@ async function downloadReport(url, env) {
   });
 }
 
-const WRITES = { "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove };
+const WRITES = { "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove, "/console/api/report-handled": handleReport };
 
 /** The routes of the console. Returns a response, or null when the path is not one of the console's. */
 export async function handleConsole(request, env) {
