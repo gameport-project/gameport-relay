@@ -78,6 +78,8 @@ const ROUTES = {
   "/test/summary": { table: "votes_test", write: false },
   "/report": { table: "reports", report: true },
   "/test/report": { table: "reports_test", report: true },
+  "/incompatible": { table: "incompatible", reasons: "incompatible_reasons", list: true },
+  "/test/incompatible": { table: "incompatible_test", reasons: "incompatible_reasons_test", list: true },
 };
 // What only the developer reads: the list of reports and each report. The route says which table (the real one or the test one).
 const ADMIN = { "/admin/reports": "reports", "/admin/test/reports": "reports_test" };
@@ -188,6 +190,20 @@ async function summary(env, table) {
   return reply(200, { v: 1, games: [...byGame.values()] }, { "cache-control": "public, max-age=300" });
 }
 
+/** The games confirmed as incompatible, and the reasons they name (title and explanation in each language). Nothing about any player. */
+async function incompatibleList(env, table, reasonsTable) {
+  let games;
+  let reasons;
+  try {
+    games = (await env.DB.prepare(`SELECT app_id AS appId, name, reason FROM ${table} ORDER BY app_id`).all()).results;
+    reasons = (await env.DB.prepare(`SELECT id, title_en, title_fr, text_en, text_fr FROM ${reasonsTable} ORDER BY id`).all()).results;
+  } catch {
+    return reply(500, { error: "not read" });
+  }
+  const byId = Object.fromEntries(reasons.map((r) => [r.id, { title: { en: r.title_en, fr: r.title_fr }, text: { en: r.text_en, fr: r.text_fr } }]));
+  return reply(200, { v: 1, reasons: byId, games }, { "cache-control": "public, max-age=300" });
+}
+
 export default {
   async fetch(request, env) {
     const path = new URL(request.url).pathname;
@@ -205,6 +221,7 @@ export default {
     const route = ROUTES[path];
     if (!route) return reply(404, { error: "not found" });
     if (!env.DB) return reply(500, { error: "relay not configured" });
+    if (route.list) return request.method === "GET" ? incompatibleList(env, route.table, route.reasons) : reply(405, { error: "use GET" });
     if (route.report) return request.method === "POST" ? report(request, env, route.table) : reply(405, { error: "use POST" });
     if (!route.write) return request.method === "GET" ? summary(env, route.table) : reply(405, { error: "use GET" });
     return request.method === "POST" ? vote(request, env, route.table) : reply(405, { error: "use POST" });

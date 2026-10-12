@@ -51,6 +51,10 @@ For example: `curl -H "Authorization: Bearer $TOKEN" https://<the relay>/admin/r
   "devices": { "quest": { "works": 6, "offlineOnly": 2, "fails": 0, "worksOffline": 3 }, "pico": { "works": 1, "offlineOnly": 0, "fails": 1, "worksOffline": 0 } } }] }
 ```
 
+## The incompatible games
+
+`GET /incompatible` (and `GET /test/incompatible`) returns the table of reasons (a title and an explanation in English and French for each) and the games confirmed as incompatible, each naming one reason: `{"v":1,"reasons":{"anti-tamper":{"title":{"en","fr"},"text":{"en","fr"}}},"games":[{"appId":…,"name":…,"reason":"anti-tamper"}]}`. The app and the site read it, so a game is shown as incompatible (badge, game page, home hidden) as long as it is on the list. The developer edits it in the console: "Incompatibility reasons" is the form that adds or changes a reason (its texts reach every game that names it), and on the page of a game "Mark as incompatible" only asks to pick a reason, nothing is typed per game. "Make compatible" takes the game off, and everyone sees the change at the next refresh (the app within minutes, the site at its next build). Texts are written for any reader, with no semicolon. The migration `migrations/0007_incompatible_reasons.sql` creates the tables of reasons and of games and puts VRChat back with its reason (it replaces 0006, which was run once before; run 0007 next).
+
 ## Setting it up once
 
 From this folder, with Node 20 or later:

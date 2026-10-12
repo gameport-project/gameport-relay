@@ -330,7 +330,7 @@ describe("a request that writes must come from the page", () => {
   });
 
   it("refuses a body that is too large or not an object", async () => {
-    assert.equal((await ask("/console/api/add", { method: "POST", body: "x".repeat(3000) })).status, 413);
+    assert.equal((await ask("/console/api/add", { method: "POST", body: "x".repeat(5000) })).status, 413);
     assert.equal((await ask("/console/api/add", { method: "POST", body: "not json" })).status, 400);
     assert.equal((await ask("/console/api/add", { method: "POST", body: "[1]" })).status, 400);
     assert.equal((await ask("/console/api/add", { method: "POST", body: "null" })).status, 400);
@@ -536,5 +536,92 @@ describe("the reports that wait, and the answer each goes with", () => {
     old.prepare("INSERT INTO reports (app_id, voter, app, device, size, data, updated) VALUES (1, 'aaaaaaaaaaaa', '0.7.4', 'quest', 4, 'UEsD', '2026-10-08')").run();
     old.exec(readFileSync(new URL("./migrations/0005_reports_handled.sql", import.meta.url), "utf8"));
     assert.deepEqual({ ...old.prepare("SELECT app_id, voter, handled FROM reports").get() }, { app_id: 1, voter: "aaaaaaaaaaaa", handled: null });
+  });
+});
+
+describe("the list of incompatible games", () => {
+  const reason = { id: "anti-tamper", title: { en: "Protected against modification", fr: "Protégé contre la modification" }, text: { en: "the game closes itself after a few seconds.", fr: "le jeu se ferme de lui-même au bout de quelques secondes." } };
+  const post = (path, body) => ask(`/console/api/${path}`, { method: "POST", body });
+  const setReason = (extra = {}, environment = "prod") => post("reason-set", { env: environment, ...reason, ...extra });
+  const setGame = (extra = {}, environment = "prod") => post("incompatible-set", { env: environment, appId: 438100, name: "Some game", reason: "anti-tamper", ...extra });
+  const publicList = async (path = "/incompatible") => (await worker.fetch(new Request(`${ORIGIN}${path}`), env)).json();
+
+  it("is empty until the developer adds a reason and a game, and the list is public", async () => {
+    assert.deepEqual(await publicList(), { v: 1, reasons: {}, games: [] });
+    assert.equal((await setReason()).status, 200);
+    assert.equal((await setGame()).status, 200);
+    assert.deepEqual(await publicList(), {
+      v: 1,
+      reasons: { "anti-tamper": { title: reason.title, text: reason.text } },
+      games: [{ appId: 438100, name: "Some game", reason: "anti-tamper" }],
+    });
+  });
+
+  it("refuses a game whose reason does not exist, and never takes a text for a game", async () => {
+    assert.equal((await setGame({ reason: "nope" })).status, 400);
+    await setReason();
+    assert.equal((await setGame({ reason: "Bad Id" })).status, 400);
+    assert.equal((await setGame({ reason: undefined })).status, 400);
+    assert.deepEqual((await publicList()).games, []);
+  });
+
+  it("keeps the real list and the test list apart", async () => {
+    await setReason({}, "test");
+    await setGame({}, "test");
+    assert.deepEqual((await publicList()).games, []);
+    assert.equal((await publicList("/test/incompatible")).games.length, 1);
+  });
+
+  it("changing the texts of a reason reaches every game that names it", async () => {
+    await setReason();
+    await setGame();
+    await setGame({ appId: 5, name: "Other" });
+    await setReason({ title: { en: "Crashes", fr: "Plante" } });
+    const list = await publicList();
+    assert.equal(list.reasons["anti-tamper"].title.fr, "Plante");
+    assert.equal(list.games.length, 2);
+  });
+
+  it("a game changes reason, and is taken off when it works", async () => {
+    await setReason();
+    await setReason({ id: "crash", title: { en: "Crashes", fr: "Plante" } });
+    await setGame();
+    await setGame({ reason: "crash" });
+    assert.equal((await publicList()).games[0].reason, "crash");
+    assert.equal((await post("incompatible-remove", { env: "prod", appId: 438100 })).status, 200);
+    assert.deepEqual((await publicList()).games, []);
+    assert.equal((await post("incompatible-remove", { env: "prod", appId: 438100 })).status, 404);
+  });
+
+  it("a reason that a game still names cannot be deleted; an unused one can", async () => {
+    await setReason();
+    await setGame();
+    assert.equal((await post("reason-remove", { env: "prod", id: "anti-tamper" })).status, 409);
+    await post("incompatible-remove", { env: "prod", appId: 438100 });
+    assert.equal((await post("reason-remove", { env: "prod", id: "anti-tamper" })).status, 200);
+    assert.deepEqual((await publicList()).reasons, {});
+  });
+
+  it("refuses a reason with a missing language, a semicolon, markup or a bad identifier", async () => {
+    for (const bad of [{ title: { en: "x" } }, { text: { en: "a; b", fr: "c" } }, { text: { en: "<b>", fr: "c" } }, { id: "A b" }, { id: "" }, { title: "x" }]) {
+      assert.equal((await setReason(bad)).status, 400, JSON.stringify(bad));
+    }
+    assert.deepEqual((await publicList()).reasons, {});
+  });
+
+  it("is written only from the console's own page and only by the signed-in developer", async () => {
+    const body = { env: "prod", ...reason };
+    assert.equal((await ask("/console/api/reason-set", { method: "POST", body, page: false })).status, 403);
+    assert.equal((await ask("/console/api/reason-set", { method: "POST", body, jwt: "" })).status, 404);
+    assert.deepEqual((await publicList()).reasons, {});
+  });
+
+  it("is read by the console, with how many games name each reason", async () => {
+    await setReason();
+    await setGame();
+    const answer = await (await ask("/console/api/incompatible?env=prod")).json();
+    assert.equal(answer.reasons[0].uses, 1);
+    assert.equal(answer.games[0].reason, "anti-tamper");
+    assert.equal((await ask("/console/api/incompatible?env=nope")).status, 400);
   });
 });

@@ -13,7 +13,7 @@ import { voterHash } from "./worker.js";
 const VERDICTS = new Set(["works", "offline_only", "fails"]);
 const DEVICES = new Set(["quest", "pico", "phone", "tablet", "other"]);
 const MAX_APP_ID = 2_000_000_000;
-const MAX_BODY_BYTES = 2048;
+const MAX_BODY_BYTES = 4096;
 // The two sets of votes the console reaches. The names come from here and from nowhere else.
 const TABLES = { prod: "votes", test: "votes_test" };
 // The technical reports a player's app sent after "it did not work", for the same two sets.
@@ -21,6 +21,8 @@ const REPORT_TABLES = { prod: "reports", test: "reports_test" };
 // The votes each set of reports goes with: a report and the vote of the same player for the same game share the app and the hashed player.
 const VOTE_OF_REPORTS = { reports: "votes", reports_test: "votes_test" };
 const MAX_REPORTS_LISTED = 200;
+// The games confirmed as incompatible, for the same two sets.
+const INCOMPATIBLE_TABLES = { prod: { games: "incompatible", reasons: "incompatible_reasons" }, test: { games: "incompatible_test", reasons: "incompatible_reasons_test" } };
 const HEADER = "x-gameport-console";
 
 const json = (status, body, extra = {}) =>
@@ -265,7 +267,88 @@ async function downloadReport(url, env) {
   });
 }
 
-const WRITES = { "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove, "/console/api/report-handled": handleReport };
+const LANGUAGES = ["en", "fr"];
+/** A title or an explanation: text in each language, written for any reader, so no semicolon and no line break. */
+function checkTexts(value, max) {
+  if (value === null || typeof value !== "object") return null;
+  const out = {};
+  for (const language of LANGUAGES) {
+    const text = typeof value[language] === "string" ? value[language].trim() : "";
+    if (!text || text.length > max || /[;\n\r<>]/.test(text)) return null;
+    out[language] = text;
+  }
+  return out;
+}
+
+const validReasonId = (id) => typeof id === "string" && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(id) && id.length <= 40;
+
+/** The reasons (with how many games name each) and the games on the list, for the chosen set. */
+async function listIncompatible(url, env) {
+  const tables = INCOMPATIBLE_TABLES[url.searchParams.get("env")];
+  if (!tables) return json(400, { error: "bad env" });
+  const reasons = (await env.DB.prepare(`SELECT r.id, r.title_en, r.title_fr, r.text_en, r.text_fr, (SELECT COUNT(*) FROM ${tables.games} g WHERE g.reason = r.id) AS uses FROM ${tables.reasons} r ORDER BY r.id`).all()).results;
+  const games = (await env.DB.prepare(`SELECT app_id AS appId, name, reason, updated FROM ${tables.games} ORDER BY name`).all()).results;
+  return json(200, {
+    reasons: reasons.map((r) => ({ id: r.id, title: { en: r.title_en, fr: r.title_fr }, text: { en: r.text_en, fr: r.text_fr }, uses: r.uses })),
+    games,
+  });
+}
+
+/** Adds a reason, or changes its texts: every game that names it shows the new texts at once. */
+async function setReason(message, env, _table, environment) {
+  const tables = INCOMPATIBLE_TABLES[environment];
+  if (!validReasonId(message.id)) return json(400, { error: "bad id" });
+  const title = checkTexts(message.title, 80);
+  if (!title) return json(400, { error: "bad title" });
+  const text = checkTexts(message.text, 400);
+  if (!text) return json(400, { error: "bad text" });
+  await env.DB.prepare(`INSERT INTO ${tables.reasons} (id, title_en, title_fr, text_en, text_fr) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT (id) DO UPDATE SET title_en = excluded.title_en, title_fr = excluded.title_fr, text_en = excluded.text_en, text_fr = excluded.text_fr`)
+    .bind(message.id, title.en, title.fr, text.en, text.fr).run();
+  log("reason-set", { env: environment, id: message.id });
+  return json(200, { ok: true });
+}
+
+/** Removes a reason that no game names any more. */
+async function removeReason(message, env, _table, environment) {
+  const tables = INCOMPATIBLE_TABLES[environment];
+  if (!validReasonId(message.id)) return json(400, { error: "bad id" });
+  const [used] = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${tables.games} WHERE reason = ?`).bind(message.id).all()).results;
+  if (used.n > 0) return json(409, { error: "games still name this reason" });
+  await env.DB.prepare(`DELETE FROM ${tables.reasons} WHERE id = ?`).bind(message.id).run();
+  log("reason-remove", { env: environment, id: message.id });
+  return json(200, { ok: true });
+}
+
+/** Adds a game to the incompatible list with one of the reasons, or changes its reason. */
+async function setIncompatible(message, env, _table, environment) {
+  const tables = INCOMPATIBLE_TABLES[environment];
+  if (!validId(message.appId)) return json(400, { error: "bad appId" });
+  const name = typeof message.name === "string" ? message.name.trim() : "";
+  if (!name || name.length > 200 || /[<>]/.test(name)) return json(400, { error: "bad name" });
+  if (!validReasonId(message.reason)) return json(400, { error: "bad reason" });
+  const [known] = (await env.DB.prepare(`SELECT id FROM ${tables.reasons} WHERE id = ?`).bind(message.reason).all()).results;
+  if (!known) return json(400, { error: "unknown reason" });
+  const today = new Date().toISOString().slice(0, 10);
+  await env.DB.prepare(`INSERT INTO ${tables.games} (app_id, name, reason, updated) VALUES (?, ?, ?, ?)
+    ON CONFLICT (app_id) DO UPDATE SET name = excluded.name, reason = excluded.reason, updated = excluded.updated`)
+    .bind(message.appId, name, message.reason, today).run();
+  log("incompatible-set", { env: environment, appId: message.appId, name, reason: message.reason });
+  return json(200, { ok: true });
+}
+
+/** Takes a game off the incompatible list: from then on the app and the site no longer say so. */
+async function removeIncompatible(message, env, _table, environment) {
+  const tables = INCOMPATIBLE_TABLES[environment];
+  if (!validId(message.appId)) return json(400, { error: "bad appId" });
+  const [row] = (await env.DB.prepare(`SELECT name FROM ${tables.games} WHERE app_id = ?`).bind(message.appId).all()).results;
+  if (!row) return json(404, { error: "not on the list" });
+  await env.DB.prepare(`DELETE FROM ${tables.games} WHERE app_id = ?`).bind(message.appId).run();
+  log("incompatible-remove", { env: environment, appId: message.appId, name: row.name });
+  return json(200, { ok: true });
+}
+
+const WRITES = { "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove, "/console/api/report-handled": handleReport, "/console/api/incompatible-set": setIncompatible, "/console/api/reason-set": setReason, "/console/api/reason-remove": removeReason, "/console/api/incompatible-remove": removeIncompatible };
 
 /** The routes of the console. Returns a response, or null when the path is not one of the console's. */
 export async function handleConsole(request, env) {
@@ -289,6 +372,7 @@ export async function handleConsole(request, env) {
     }
     if (url.pathname === "/console/api/votes") return request.method === "GET" ? await list(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/app") return request.method === "GET" ? await appInfo(url) : json(405, { error: "use GET" });
+    if (url.pathname === "/console/api/incompatible") return request.method === "GET" ? await listIncompatible(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/reports") return request.method === "GET" ? await listReports(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/report") return request.method === "GET" ? await downloadReport(url, env) : json(405, { error: "use GET" });
     const write = WRITES[url.pathname];

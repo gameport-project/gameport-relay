@@ -56,3 +56,37 @@ CREATE TABLE IF NOT EXISTS reports_test (
   handled TEXT,
   UNIQUE (app_id, voter)
 );
+
+-- Why a game cannot run through GamePort: one row per reason, with its title and its explanation in each language. Many games share a reason. Only the
+-- developer writes here (the console); the app and the site read it with the list of games (the /incompatible routes), so nothing is typed per game.
+CREATE TABLE IF NOT EXISTS incompatible_reasons (
+  id       TEXT PRIMARY KEY,  -- a short word, e.g. anti-tamper
+  title_en TEXT NOT NULL,
+  title_fr TEXT NOT NULL,
+  text_en  TEXT NOT NULL,
+  text_fr  TEXT NOT NULL
+);
+
+-- The games confirmed as incompatible, each with the reason it is on the list for. Taking a game out, once it works, shows at once everywhere.
+CREATE TABLE IF NOT EXISTS incompatible (
+  app_id  INTEGER PRIMARY KEY,
+  name    TEXT NOT NULL,
+  reason  TEXT NOT NULL,    -- an id of incompatible_reasons
+  updated TEXT NOT NULL     -- the day, YYYY-MM-DD
+);
+
+-- The same two tables for the test builds of the app (the /test routes).
+CREATE TABLE IF NOT EXISTS incompatible_reasons_test (
+  id       TEXT PRIMARY KEY,
+  title_en TEXT NOT NULL,
+  title_fr TEXT NOT NULL,
+  text_en  TEXT NOT NULL,
+  text_fr  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS incompatible_test (
+  app_id  INTEGER PRIMARY KEY,
+  name    TEXT NOT NULL,
+  reason  TEXT NOT NULL,
+  updated TEXT NOT NULL
+);
