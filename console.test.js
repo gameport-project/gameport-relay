@@ -658,7 +658,8 @@ describe("what is new", () => {
     await news();
     const today = new Date().toISOString().slice(0, 10);
     stamped(1, "aaaaaaaaaaaa", null, "2000-01-01");
-    stamped(2, "bbbbbbbbbbbb", null, today);
+    stamped(2, "bbbbbbbbbbbb", null, "2999-01-01");
+    stamped(5, "eeeeeeeeeeee", null, today);
     stamped(3, "cccccccccccc", hour(-5), today);
     stamped(4, "dddddddddddd", hour(1), today);
     const result = await news();

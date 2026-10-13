@@ -371,7 +371,7 @@ async function news(url, env) {
   const votesSince = await seenAt(env, SEEN_VOTES[environment], nextHour(now));
   const gamesSince = await seenAt(env, "games", now.toISOString().slice(0, 10));
   const rows = (await env.DB.prepare(`SELECT app_id AS appId, COUNT(*) AS n, SUM(verdict = 'works') AS works, SUM(verdict = 'offline_only') AS offlineOnly, SUM(verdict = 'fails') AS fails
-    FROM ${table} WHERE (voted_at IS NOT NULL AND voted_at >= ?) OR (voted_at IS NULL AND updated >= ?) GROUP BY app_id ORDER BY n DESC, app_id`)
+    FROM ${table} WHERE (voted_at IS NOT NULL AND voted_at >= ?) OR (voted_at IS NULL AND updated > ?) GROUP BY app_id ORDER BY n DESC, app_id`)
     .bind(votesSince, votesSince.slice(0, 10)).all()).results;
   return json(200, {
     votesSince, gamesSince,
