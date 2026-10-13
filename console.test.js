@@ -188,6 +188,34 @@ describe("adding a vote", () => {
     assert.deepEqual(await summary(), []);
   });
 
+  it("tells the private channel of a vote added in production, as admin, and not one added in the test set", async () => {
+    const realFetch = globalThis.fetch;
+    const sent = [];
+    const waiting = [];
+    globalThis.fetch = async (url, options) => {
+      if (String(url).startsWith("https://store.steampowered.com/")) return new Response("{}", { status: 500 });
+      sent.push(JSON.parse(options.body));
+      return new Response(null, { status: 204 });
+    };
+    try {
+      env.DISCORD_ADMIN_WEBHOOK = "https://discord.com/api/webhooks/123456789/token-abc_DEF";
+      const send = async (environment) => {
+        const jwt = await token(keys);
+        const request = new Request(`${ORIGIN}/console/api/add`, { method: "POST", headers: { "cf-access-jwt-assertion": jwt, "content-type": "application/json", "x-gameport-console": "1", origin: ORIGIN }, body: JSON.stringify({ env: environment, appId: 7, device: "pico", verdict: "works" }) });
+        const response = await worker.fetch(request, env, { waitUntil: (p) => waiting.push(p) });
+        await Promise.all(waiting);
+        return response;
+      };
+      assert.equal((await send("test")).status, 200);
+      assert.equal(sent.length, 0);
+      assert.equal((await send("prod")).status, 200);
+      assert.equal(sent.length, 1);
+      assert.deepEqual(sent[0].embeds[0].fields.map((f) => f.value).slice(0, 3), ["Works", "Pico", "admin"]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   it("adds in production only when production is asked, and each added vote counts once more", async () => {
     for (let i = 0; i < 3; i++) await ask("/console/api/add", { method: "POST", body: { env: "prod", appId: 7, device: "quest", verdict: "fails" } });
     assert.equal(rows().length, 3);

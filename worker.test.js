@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { beforeEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import worker, { validate, voterHash } from "./worker.js";
 
 const VOTER = "0123456789abcdef0123456789abcdef";
@@ -476,3 +476,93 @@ describe("the reports", () => {
     assert.equal((await worker.fetch(new Request("https://relay.example.invalid/admin/reports", { method: "POST", headers: { authorization: "Bearer the-developer-token" } }), env)).status, 405);
   });
 });
+
+describe("the messages to the developer's private channel", () => {
+  const HOOK = "https://discord.com/api/webhooks/123456789/token-abc_DEF";
+  const ZIP = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]);
+  let db;
+  let env;
+  let sent;
+  let waiting;
+  let realFetch;
+  const ctx = { waitUntil: (promise) => waiting.push(promise) };
+  const run = async (request) => {
+    const response = await worker.fetch(request, env, ctx);
+    await Promise.all(waiting);
+    return response;
+  };
+  const report = (extra = {}) => new Request(`https://relay.example.invalid/report?${new URLSearchParams({ appId: "846470", app: "0.7.4", device: "pico", voter: VOTER, ...extra })}`, { method: "POST", body: ZIP });
+
+  beforeEach(() => {
+    db = new DatabaseSync(":memory:");
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    env = { DB: d1(db), VOTER_SALT: "salt", DISCORD_ADMIN_WEBHOOK: HOOK };
+    sent = [];
+    waiting = [];
+    realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+      if (String(url).startsWith("https://store.steampowered.com/")) return new Response(JSON.stringify({ 846470: { success: true, data: { name: "A Game" } } }));
+      sent.push({ url: String(url), body: JSON.parse(options.body) });
+      return new Response(null, { status: 204 });
+    };
+  });
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  it("tells a real vote with the game, the answer and the device, and nothing about the player", async () => {
+    assert.equal((await run(post(goodMessage({ appId: 846470, verdict: "fails", device: "pico" })))).status, 204);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].url, HOOK);
+    const embed = sent[0].body.embeds[0];
+    assert.match(embed.title, /A Game/);
+    assert.deepEqual(embed.fields.slice(0, 2).map((f) => f.value), ["Does not work", "Pico"]);
+    assert.deepEqual(sent[0].body.allowed_mentions, { parse: [] });
+    assert.ok(!JSON.stringify(sent).includes(VOTER));
+    assert.ok(!JSON.stringify(sent).includes(rowsOf(db)[0].voter));
+  });
+
+  it("does not tell a vote of the test set, and the player's answer is the same without a channel", async () => {
+    assert.equal((await run(post(goodMessage(), "/test/vote"))).status, 204);
+    assert.equal(sent.length, 0);
+    delete env.DISCORD_ADMIN_WEBHOOK;
+    assert.equal((await run(post(goodMessage()))).status, 204);
+    assert.equal(sent.length, 0);
+  });
+
+  it("ignores an address that is not a Discord webhook", async () => {
+    env.DISCORD_ADMIN_WEBHOOK = "https://evil.example.invalid/api/webhooks/1/x";
+    assert.equal((await run(post(goodMessage()))).status, 204);
+    assert.equal(sent.length, 0);
+  });
+
+  it("saves the vote and answers 204 even when Discord fails", async () => {
+    globalThis.fetch = async () => { throw new Error("down"); };
+    assert.equal((await run(post(goodMessage()))).status, 204);
+    assert.equal(rowsOf(db).length, 1);
+  });
+
+  it("tells a real report with the player's own answer for that game, and not a report of the test set", async () => {
+    await run(post(goodMessage({ appId: 846470, verdict: "offline_only" })));
+    sent.length = 0;
+    assert.equal((await run(report())).status, 204);
+    assert.equal(sent.length, 1);
+    const embed = sent[0].body.embeds[0];
+    assert.match(embed.title, /A Game/);
+    assert.deepEqual(embed.fields.slice(0, 2).map((f) => f.value), ["Works offline only", "Pico"]);
+    const id = db.prepare("SELECT id FROM reports").get().id;
+    assert.match(embed.description, new RegExp(`\\[Download the report\\]\\(https://relay.example.invalid/console/api/report\\?env=prod&id=${id}\\)`));
+    assert.match(embed.description, /store\.steampowered\.com\/app\/846470/);
+    assert.match(embed.thumbnail.url, /\/846470\/library_600x900\.jpg$/);
+    sent.length = 0;
+    await run(new Request(`https://relay.example.invalid/test/report?${new URLSearchParams({ appId: "846470", app: "0.7.4", device: "pico", voter: VOTER })}`, { method: "POST", body: ZIP }));
+    assert.equal(sent.length, 0);
+  });
+
+  it("says the report has no vote when the player gave none", async () => {
+    await run(report());
+    assert.equal(sent[0].body.embeds[0].fields[0].value, "No vote");
+  });
+});
+
+function rowsOf(db) {
+  return db.prepare("SELECT * FROM votes").all().map((row) => ({ ...row }));
+}

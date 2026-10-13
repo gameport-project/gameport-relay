@@ -8,6 +8,7 @@
 // Without the three secrets (ACCESS_TEAM, ACCESS_AUD, ADMIN_EMAIL), nothing here answers: every route is a 404, as if it did not exist.
 
 import { consolePage } from "./console_page.js";
+import { notifyVote } from "./notify.js";
 import { thisHour, voterHash } from "./worker.js";
 
 const VERDICTS = new Set(["works", "offline_only", "fails"]);
@@ -130,7 +131,7 @@ async function list(url, env) {
   return json(200, { votes: rows.map((row) => ({ ...row, offline: row.offline === 1 })) });
 }
 
-async function add(message, env, table, environment) {
+async function add(message, env, table, environment, ctx, origin) {
   if (!validId(message.appId)) return json(400, { error: "bad appId" });
   const { fields, error } = checkVote(message, { partial: false });
   if (error) return json(400, { error });
@@ -142,6 +143,8 @@ async function add(message, env, table, environment) {
   await env.DB.prepare(`INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated, voted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(message.appId, voter, fields.verdict, "admin", null, fields.device, offline, today, thisHour()).run();
   log("add", { env: environment, appId: message.appId, voter, verdict: fields.verdict, device: fields.device });
+  // Told like a player's vote, so the channel can be tried from here; it says "admin" where a player's says the version of GamePort.
+  if (table === "votes") notifyVote(env, ctx, origin, { appId: message.appId, verdict: fields.verdict, device: fields.device, offline: offline === 1, app: "admin" });
   return json(200, { voter });
 }
 
@@ -391,7 +394,7 @@ async function seen(message, env, _table, environment) {
 const WRITES = { "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove, "/console/api/report-handled": handleReport, "/console/api/incompatible-set": setIncompatible, "/console/api/reason-set": setReason, "/console/api/reason-remove": removeReason, "/console/api/incompatible-remove": removeIncompatible, "/console/api/seen": seen };
 
 /** The routes of the console. Returns a response, or null when the path is not one of the console's. */
-export async function handleConsole(request, env) {
+export async function handleConsole(request, env, ctx) {
   const url = new URL(request.url);
   if (url.pathname !== "/console" && !url.pathname.startsWith("/console/")) return null;
   if (!(await isSignedIn(request, env))) return notFound();
@@ -424,7 +427,7 @@ export async function handleConsole(request, env) {
     if (error) return json(status, { error });
     const table = TABLES[message.env];
     if (!table) return json(400, { error: "bad env" });
-    return await write(message, env, table, message.env);
+    return await write(message, env, table, message.env, ctx, url.origin);
   } catch {
     return json(500, { error: "not done" });
   }

@@ -4,6 +4,7 @@
 // and per game for 30 days, and only the developer, with a secret token, can read them. See README.md.
 
 import { handleConsole } from "./console.js";
+import { notifyReport, notifyVote } from "./notify.js";
 
 // "offline_only": the game works, but only without the network (its online or multiplayer part does not).
 const VERDICTS = new Set(["works", "offline_only", "fails"]);
@@ -96,7 +97,7 @@ function reply(status, body, headers = {}) {
   return new Response(json ? JSON.stringify(body) : null, { status, headers: json ? { "content-type": "application/json", ...headers } : headers });
 }
 
-async function vote(request, env, table) {
+async function vote(request, env, table, ctx) {
   // One player cannot flood the database: the limit is per address, and the address is used for nothing else.
   if (env.LIMITER) {
     const { success } = await env.LIMITER.limit({ key: request.headers.get("CF-Connecting-IP") ?? "unknown" });
@@ -120,10 +121,12 @@ async function vote(request, env, table) {
     // What the database said stays here: the player only learns that it did not work.
     return reply(500, { error: "not saved" });
   }
+  // Only the real votes tell the developer: the test set is for trying things out.
+  if (table === "votes") notifyVote(env, ctx, new URL(request.url).origin, checked);
   return reply(204);
 }
 
-async function report(request, env, table) {
+async function report(request, env, table, ctx) {
   if (env.LIMITER) {
     const { success } = await env.LIMITER.limit({ key: `report:${request.headers.get("CF-Connecting-IP") ?? "unknown"}` });
     if (!success) return reply(429, { error: "too many reports" });
@@ -144,6 +147,19 @@ async function report(request, env, table) {
     await env.DB.prepare(`DELETE FROM ${table} WHERE updated < ?`).bind(oldest).run();
   } catch {
     return reply(500, { error: "not saved" });
+  }
+  if (table === "reports") {
+    let answer = null;
+    let id = 0;
+    try {
+      const [own] = (await env.DB.prepare("SELECT verdict FROM votes WHERE app_id = ? AND voter = ?").bind(meta.appId, voter).all()).results;
+      answer = own ? own.verdict : null;
+      const [saved] = (await env.DB.prepare(`SELECT id FROM ${table} WHERE app_id = ? AND voter = ?`).bind(meta.appId, voter).all()).results;
+      id = saved ? saved.id : 0;
+    } catch {
+      // The report is told without the player's answer, and without its link.
+    }
+    notifyReport(env, ctx, new URL(request.url).origin, { id, appId: meta.appId, app: meta.app, device: meta.device, size: bytes.length }, answer);
   }
   return reply(204);
 }
@@ -208,10 +224,10 @@ async function incompatibleList(env, table, reasonsTable) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const path = new URL(request.url).pathname;
     // The developer's console answers its own routes (see console.js); to everyone else they do not exist.
-    const consoleAnswer = await handleConsole(request, env);
+    const consoleAnswer = await handleConsole(request, env, ctx);
     if (consoleAnswer) return consoleAnswer;
     const developerRoute = Object.keys(ADMIN).find((base) => path === base || path.startsWith(`${base}/`));
     if (developerRoute) {
@@ -225,8 +241,8 @@ export default {
     if (!route) return reply(404, { error: "not found" });
     if (!env.DB) return reply(500, { error: "relay not configured" });
     if (route.list) return request.method === "GET" ? incompatibleList(env, route.table, route.reasons) : reply(405, { error: "use GET" });
-    if (route.report) return request.method === "POST" ? report(request, env, route.table) : reply(405, { error: "use POST" });
+    if (route.report) return request.method === "POST" ? report(request, env, route.table, ctx) : reply(405, { error: "use POST" });
     if (!route.write) return request.method === "GET" ? summary(env, route.table) : reply(405, { error: "use GET" });
-    return request.method === "POST" ? vote(request, env, route.table) : reply(405, { error: "use POST" });
+    return request.method === "POST" ? vote(request, env, route.table, ctx) : reply(405, { error: "use POST" });
   },
 };
