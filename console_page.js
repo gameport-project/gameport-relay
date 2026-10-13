@@ -86,6 +86,9 @@ td { white-space:nowrap; }
 .todo { display:inline-flex; align-items:center; gap:6px; color:var(--warn); font-weight:600; font-size:13px; }
 .todo::before { content:""; width:9px; height:9px; border-radius:50%; background:var(--warn); }
 tr.waiting td:first-child { border-left:4px solid var(--warn); }
+.chip[aria-pressed="true"] { background:#fff; color:#111; border-color:transparent; }
+button.chip { cursor:pointer; font:inherit; color:inherit; }
+.day { margin:16px 0 6px; color:var(--muted); font-size:13px; font-weight:600; }
 .badge { display:inline-block; min-width:20px; padding:1px 7px; margin-left:8px; border-radius:999px; background:var(--warn); color:#10131a; font-size:12px; font-weight:800; text-align:center; }
 .game .wait { width:10px; height:10px; border-radius:50%; background:var(--warn); flex:none; }
 a.btn { display:inline-flex; align-items:center; text-decoration:none; }
@@ -106,6 +109,7 @@ a.btn { display:inline-flex; align-items:center; text-decoration:none; }
   </div>
   <nav class="pages" aria-label="Pages">
     <button type="button" class="banner-btn" id="latest">Latest reports<span class="badge" id="latest-count" hidden></span></button>
+    <button type="button" class="banner-btn" id="news">What is new<span class="badge" id="news-count" hidden></span></button>
     <button type="button" class="banner-btn" id="reasons">Incompatibility reasons</button>
   </nav>
 </div>
@@ -124,7 +128,7 @@ a.btn { display:inline-flex; align-items:center; text-decoration:none; }
 var CATALOG = "https://raw.githubusercontent.com/gameport-project/gameport-catalog/main/v1/catalog.json";
 var DEVICES = ["quest", "pico", "phone", "tablet", "other"];
 var VERDICTS = { works: "Works", offline_only: "Offline only", fails: "Does not work" };
-var state = { env: "test", games: [], current: null, votes: [], counts: {}, onlyVoted: false, incompat: {}, reasons: [], view: "", extra: {}, unhandled: 0, waiting: {} };
+var state = { env: "test", games: [], current: null, votes: [], counts: {}, onlyVoted: false, incompat: {}, reasons: [], view: "", extra: {}, unhandled: 0, waiting: {}, news: null };
 
 function el(tag, attrs, children) {
   var node = document.createElement(tag);
@@ -168,10 +172,12 @@ function setEnv(env) {
   document.getElementById("b-test").setAttribute("aria-pressed", String(env === "test"));
   document.getElementById("b-prod").setAttribute("aria-pressed", String(env === "prod"));
   loadWaiting();
+  loadNews();
   loadIncompatible();
   loadCounts().then(function () {
     drawGames();
     if (state.view === "reports") showLatestReports();
+    else if (state.view === "news") showNews();
     else if (state.current) loadVotes();
   });
 }
@@ -418,6 +424,104 @@ function reportsTable(reports, withGame, refresh) {
 
 var reportsAsked = 0;
 
+/** The day (UTC) a game became installable on Android, as the catalog tells it: only the games that have one can be news. */
+function newGames(since) {
+  return state.games.filter(function (g) { return g.androidSince && g.androidSince > since; });
+}
+
+/** What is new since the last time the news were opened: the badge of the button. The votes come from the relay, the games from the catalog. */
+function loadNews() {
+  return call("/console/api/news?env=" + state.env).then(function (data) {
+    state.news = data;
+    var total = data.votes.count + newGames(data.gamesSince).length;
+    var badge = document.getElementById("news-count");
+    badge.textContent = String(total);
+    badge.hidden = !total;
+  }).catch(function () { state.news = null; });
+}
+
+function dayOffset(offset) {
+  return new Date(Date.now() + offset * 86400000).toISOString().slice(0, 10);
+}
+
+/** The news: the votes saved since the last visit and the games that came to Android, with a filter on the days. Opening them marks them as seen. */
+function showNews() {
+  state.current = null;
+  state.view = "news";
+  drawGames();
+  var panel = document.getElementById("detail");
+  panel.textContent = "";
+  panel.appendChild(el("h2", { text: "What is new (" + (state.env === "prod" ? "production" : "test") + ")" }));
+  call("/console/api/news?env=" + state.env).then(function (data) {
+    if (state.view !== "news") return;
+    drawNews(panel, data);
+    // Seen from now on: the list stays on screen until another page is opened, and the badge goes.
+    Promise.all([call("/console/api/seen", { env: state.env, what: "votes" }), call("/console/api/seen", { env: state.env, what: "games" })]).then(function () {
+      state.news = { votesSince: data.votesSince, gamesSince: data.gamesSince, votes: { count: 0, games: [] } };
+      var badge = document.getElementById("news-count");
+      badge.hidden = true;
+    }).catch(function () {});
+  }).catch(function (e) { toast(e.message, true); });
+}
+
+function drawNews(panel, data) {
+  var votes = data.votes;
+  panel.appendChild(el("h3", { text: "Votes since " + data.votesSince.slice(0, 13).replace("T", " ") + " UTC" }));
+  if (!votes.count) panel.appendChild(el("p", { class: "muted", text: "No new vote." }));
+  else {
+    panel.appendChild(el("div", { class: "totals" }, [
+      el("span", { class: "chip", text: votes.count + (votes.count === 1 ? " vote" : " votes") }),
+      el("span", { class: "chip" }, [el("span", { class: "dot d-works" }), document.createTextNode(String(votes.works))]),
+      el("span", { class: "chip" }, [el("span", { class: "dot d-offline_only" }), document.createTextNode(String(votes.offlineOnly))]),
+      el("span", { class: "chip" }, [el("span", { class: "dot d-fails" }), document.createTextNode(String(votes.fails))]),
+    ]));
+    var table = el("table", {}, [el("thead", {}, [el("tr", {}, ["Game", "New votes", "Works", "Offline only", "Does not work"].map(function (h) { return el("th", { text: h }); }))])]);
+    var body = el("tbody");
+    votes.games.forEach(function (row) {
+      var game = allGames().filter(function (g) { return g.appid === row.appId; })[0] || { appid: row.appId, name: "App " + row.appId, vr: false, installable: true, extra: true };
+      if (game.extra && !state.extra[game.appid]) { state.extra[game.appid] = game; resolveName(game); }
+      var open = el("button", { type: "button", class: "btn", text: game.name, onclick: function () { state.current = game; state.view = "game"; drawGames(); loadVotes(); } });
+      body.appendChild(el("tr", {}, [el("td", {}, [open]), el("td", { text: String(row.n) }), el("td", { text: String(row.works) }), el("td", { text: String(row.offlineOnly) }), el("td", { text: String(row.fails) })]));
+    });
+    table.appendChild(body);
+    panel.appendChild(el("div", { class: "scroll" }, [table]));
+  }
+
+  panel.appendChild(el("h3", { class: "gap", text: "Games that came to Android" }));
+  var today = dayOffset(0);
+  var yesterday = dayOffset(-1);
+  var filters = [
+    { id: "since", label: "Since my last visit (" + data.gamesSince + ")", keep: function (g) { return g.androidSince > data.gamesSince; } },
+    { id: "today", label: "Today", keep: function (g) { return g.androidSince === today; } },
+    { id: "yesterday", label: "Yesterday", keep: function (g) { return g.androidSince === yesterday; } },
+  ];
+  var chosen = "since";
+  var chips = el("div", { class: "totals" });
+  var list = el("div");
+  var draw = function () {
+    chips.textContent = "";
+    list.textContent = "";
+    filters.forEach(function (f) {
+      var count = state.games.filter(function (g) { return g.androidSince && f.keep(g); }).length;
+      chips.appendChild(el("button", { type: "button", class: "chip", "aria-pressed": String(f.id === chosen), text: f.label + " · " + count, onclick: function () { chosen = f.id; draw(); } }));
+    });
+    var keep = filters.filter(function (f) { return f.id === chosen; })[0].keep;
+    var shown = state.games.filter(function (g) { return g.androidSince && keep(g); }).sort(function (a, b) { return b.androidSince.localeCompare(a.androidSince) || a.name.localeCompare(b.name); });
+    if (!shown.length) list.appendChild(el("p", { class: "muted", text: "No game." }));
+    var day = "";
+    shown.forEach(function (g) {
+      if (g.androidSince !== day) { day = g.androidSince; list.appendChild(el("div", { class: "day", text: day })); }
+      list.appendChild(el("button", { type: "button", class: "game", onclick: function () { state.current = g; state.view = "game"; drawGames(); loadVotes(); } }, [
+        g.cover ? el("img", { src: g.cover, alt: "", loading: "lazy" }) : el("span"),
+        el("span", { class: "t" }, [el("b", { text: g.name }), el("small", { text: (g.type || "game") + " · " + (g.vr ? "VR" : "Flat") })]),
+      ]));
+    });
+  };
+  draw();
+  panel.appendChild(chips);
+  panel.appendChild(list);
+}
+
 function showLatestReports() {
   state.current = null;
   state.view = "reports";
@@ -555,6 +659,7 @@ document.getElementById("b-prod").addEventListener("click", function () { setEnv
 document.getElementById("q").addEventListener("input", drawGames);
 document.getElementById("latest").addEventListener("click", showLatestReports);
 document.getElementById("reasons").addEventListener("click", showReasons);
+document.getElementById("news").addEventListener("click", showNews);
 document.getElementById("only").addEventListener("click", function () {
   state.onlyVoted = !state.onlyVoted;
   this.setAttribute("aria-pressed", String(state.onlyVoted));

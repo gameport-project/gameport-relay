@@ -183,7 +183,7 @@ describe("adding a vote", () => {
     assert.match(voter, /^[0-9a-f]{12}$/);
     assert.deepEqual(rows(), []);
     const [stored] = rows("votes_test");
-    assert.deepEqual({ ...stored, voter: undefined }, { app_id: 7, voter: undefined, verdict: "works", app: "admin", game: null, device: "pico", offline: 1, updated: new Date().toISOString().slice(0, 10), fixed: null, fixed_in: null });
+    assert.deepEqual({ ...stored, voter: undefined }, { app_id: 7, voter: undefined, verdict: "works", app: "admin", game: null, device: "pico", offline: 1, updated: new Date().toISOString().slice(0, 10), fixed: null, fixed_in: null, voted_at: `${new Date().toISOString().slice(0, 13)}:00:00Z` });
     assert.deepEqual(await summary("/test/summary"), [{ appId: 7, works: 1, offlineOnly: 0, fails: 0, worksOffline: 1, devices: { pico: { works: 1, offlineOnly: 0, fails: 0, worksOffline: 1 } } }]);
     assert.deepEqual(await summary(), []);
   });
@@ -623,5 +623,80 @@ describe("the list of incompatible games", () => {
     assert.equal(answer.reasons[0].uses, 1);
     assert.equal(answer.games[0].reason, "anti-tamper");
     assert.equal((await ask("/console/api/incompatible?env=nope")).status, 400);
+  });
+});
+
+describe("what is new", () => {
+  const news = async (environment = "prod") => (await ask(`/console/api/news?env=${environment}`)).json();
+  const seen = (what, environment = "prod") => ask("/console/api/seen", { method: "POST", body: { env: environment, what } });
+  const hour = (offset = 0) => `${new Date(Date.now() + offset * 3600_000).toISOString().slice(0, 13)}:00:00Z`;
+  const stamped = (appId, voter, votedAt, updated, verdict = "fails") => db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated, voted_at) VALUES (?, ?, ?, '0.7.2', NULL, 'quest', 0, ?, ?)")
+    .run(appId, voter, verdict, updated, votedAt);
+
+  it("is stamped by the relay's clock when a player votes, rounded down to the hour, whatever the app sends", async () => {
+    const message = { v: 1, appId: 5, voter: "0123456789abcdef0123456789abcdef", verdict: "works", app: "0.9.0", device: "quest", at: "1999-01-01T00:00:00Z" };
+    const response = await worker.fetch(new Request(`${ORIGIN}/vote`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(message) }), env);
+    assert.equal(response.status, 204);
+    assert.equal(rows()[0].voted_at, hour());
+    assert.match(rows()[0].voted_at, /^\d{4}-\d\d-\d\dT\d\d:00:00Z$/);
+  });
+
+  it("starts at now the first time, so the old votes are not news, and then counts what came after", async () => {
+    stamped(5, "aaaaaaaaaaaa", hour(-30), "2026-10-01");
+    const first = await news();
+    assert.equal(first.votes.count, 0);
+    assert.equal(first.votesSince, hour(1));
+    stamped(5, "bbbbbbbbbbbb", hour(1), "2026-10-13", "works");
+    stamped(6, "cccccccccccc", hour(2), "2026-10-13", "fails");
+    stamped(7, "dddddddddddd", hour(), "2026-10-13", "fails");
+    const later = await news();
+    assert.deepEqual({ count: later.votes.count, works: later.votes.works, fails: later.votes.fails }, { count: 2, works: 1, fails: 1 });
+    assert.deepEqual(later.votes.games.map((g) => g.appId).sort(), [5, 6]);
+  });
+
+  it("tells a vote without a time by its day, and a vote with a time by its hour", async () => {
+    await news();
+    const today = new Date().toISOString().slice(0, 10);
+    stamped(1, "aaaaaaaaaaaa", null, "2000-01-01");
+    stamped(2, "bbbbbbbbbbbb", null, today);
+    stamped(3, "cccccccccccc", hour(-5), today);
+    stamped(4, "dddddddddddd", hour(1), today);
+    const result = await news();
+    assert.deepEqual(result.votes.games.map((g) => g.appId).sort(), [2, 4]);
+  });
+
+  it("is cleared by marking as seen, for one set at a time, and games have their own day", async () => {
+    await news();
+    await news("test");
+    stamped(5, "aaaaaaaaaaaa", hour(1), "2026-10-13");
+    db.prepare("INSERT INTO votes_test (app_id, voter, verdict, app, game, device, offline, updated, voted_at) VALUES (5, 'bbbbbbbbbbbb', 'works', '0.7.2', NULL, 'quest', 0, '2026-10-13', ?)").run(hour(1));
+    assert.equal((await news()).votes.count, 1);
+    assert.equal((await news("test")).votes.count, 1);
+    db.prepare("UPDATE console_seen SET at = '2000-01-01' WHERE name = 'games'").run();
+    assert.equal((await news()).gamesSince, "2000-01-01");
+    assert.equal((await seen("votes")).status, 200);
+    assert.equal(db.prepare("SELECT at FROM console_seen WHERE name = 'votes-prod'").get().at, hour(1));
+    db.prepare("UPDATE console_seen SET at = ? WHERE name = 'votes-prod'").run(hour(2));
+    assert.equal((await news()).votes.count, 0);
+    assert.equal((await news("test")).votes.count, 1);
+    assert.equal((await seen("games")).status, 200);
+    assert.equal((await news()).gamesSince, new Date().toISOString().slice(0, 10));
+  });
+
+  it("refuses what is not exactly known, and needs the token and the page", async () => {
+    assert.equal((await ask("/console/api/news?env=votes")).status, 400);
+    assert.equal((await ask("/console/api/news?env=prod", { jwt: null })).status, 404);
+    assert.equal((await seen("votes", "nope")).status, 400);
+    assert.equal((await seen("something")).status, 400);
+    assert.equal((await ask("/console/api/seen", { method: "POST", page: false, body: { env: "prod", what: "votes" } })).status, 403);
+  });
+
+  it("adds the column and the table to a database made before them, and keeps its votes", () => {
+    const old = new DatabaseSync(":memory:");
+    old.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*voted_at +TEXT.*\n/gm, "").replace(/CREATE TABLE IF NOT EXISTS console_seen[\s\S]*?\);/, ""));
+    old.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (1, 'aaaaaaaaaaaa', 'works', '0.7.2', NULL, 'quest', 0, '2026-10-08')").run();
+    old.exec(readFileSync(new URL("./migrations/0009_voted_at.sql", import.meta.url), "utf8"));
+    assert.deepEqual({ ...old.prepare("SELECT app_id, voter, voted_at FROM votes").get() }, { app_id: 1, voter: "aaaaaaaaaaaa", voted_at: null });
+    assert.equal(old.prepare("SELECT COUNT(*) AS n FROM console_seen").get().n, 0);
   });
 });

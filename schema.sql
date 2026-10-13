@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS votes (
   updated TEXT    NOT NULL,  -- the day, YYYY-MM-DD: no finer than that
   fixed   TEXT,              -- the day the problem was solved: from then on the vote is no longer counted; empty while it counts
   fixed_in TEXT,             -- where it was solved, free text (a version of GamePort); only for the developer
+  voted_at TEXT,             -- when the relay saved the vote, UTC, rounded down to the hour (YYYY-MM-DDTHH:00:00Z): only for the developer's console; empty for the votes saved before it existed
   PRIMARY KEY (app_id, voter)
 );
 
@@ -25,6 +26,7 @@ CREATE TABLE IF NOT EXISTS votes_test (
   updated TEXT    NOT NULL,  -- the day, YYYY-MM-DD: no finer than that
   fixed   TEXT,              -- the day the problem was solved: from then on the vote is no longer counted; empty while it counts
   fixed_in TEXT,             -- where it was solved, free text (a version of GamePort); only for the developer
+  voted_at TEXT,             -- when the relay saved the vote, UTC, rounded down to the hour (YYYY-MM-DDTHH:00:00Z): only for the developer's console; empty for the votes saved before it existed
   PRIMARY KEY (app_id, voter)
 );
 
@@ -89,4 +91,11 @@ CREATE TABLE IF NOT EXISTS incompatible_test (
   name    TEXT NOT NULL,
   reason  TEXT NOT NULL,
   updated TEXT NOT NULL
+);
+
+-- What the developer's console has already shown: one row per list ('votes-prod', 'votes-test', 'games'), with the hour (or, for the games, the day) of the last time
+-- the news were opened. Only the console reads and writes it.
+CREATE TABLE IF NOT EXISTS console_seen (
+  name TEXT PRIMARY KEY,
+  at   TEXT NOT NULL
 );

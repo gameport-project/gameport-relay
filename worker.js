@@ -84,8 +84,11 @@ const ROUTES = {
 // What only the developer reads: the list of reports and each report. The route says which table (the real one or the test one).
 const ADMIN = { "/admin/reports": "reports", "/admin/test/reports": "reports_test" };
 
-const upsert = (table) => `INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  ON CONFLICT (app_id, voter) DO UPDATE SET verdict = excluded.verdict, app = excluded.app, game = excluded.game, device = excluded.device, offline = excluded.offline, updated = excluded.updated, fixed = NULL, fixed_in = NULL`;
+const upsert = (table) => `INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated, voted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT (app_id, voter) DO UPDATE SET verdict = excluded.verdict, app = excluded.app, game = excluded.game, device = excluded.device, offline = excluded.offline, updated = excluded.updated, voted_at = excluded.voted_at, fixed = NULL, fixed_in = NULL`;
+
+/** The relay's own clock, UTC, rounded down to the hour: the app never sends a time, and none of a player's is used. */
+export const thisHour = (now = new Date()) => `${now.toISOString().slice(0, 13)}:00:00Z`;
 const summaryQuery = (table) => `SELECT app_id AS appId, device, SUM(verdict = 'works') AS works, SUM(verdict = 'offline_only') AS offlineOnly, SUM(verdict = 'fails') AS fails, SUM(verdict = 'works' AND offline = 1) AS worksOffline FROM ${table} WHERE fixed IS NULL GROUP BY app_id, device ORDER BY app_id, device`;
 
 function reply(status, body, headers = {}) {
@@ -112,7 +115,7 @@ async function vote(request, env, table) {
   const voter = await voterHash(checked.voter, env.VOTER_SALT);
   const today = new Date().toISOString().slice(0, 10);
   try {
-    await env.DB.prepare(upsert(table)).bind(checked.appId, voter, checked.verdict, checked.app, checked.game ?? null, checked.device, checked.offline ? 1 : 0, today).run();
+    await env.DB.prepare(upsert(table)).bind(checked.appId, voter, checked.verdict, checked.app, checked.game ?? null, checked.device, checked.offline ? 1 : 0, today, thisHour()).run();
   } catch {
     // What the database said stays here: the player only learns that it did not work.
     return reply(500, { error: "not saved" });

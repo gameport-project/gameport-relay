@@ -8,7 +8,7 @@
 // Without the three secrets (ACCESS_TEAM, ACCESS_AUD, ADMIN_EMAIL), nothing here answers: every route is a 404, as if it did not exist.
 
 import { consolePage } from "./console_page.js";
-import { voterHash } from "./worker.js";
+import { thisHour, voterHash } from "./worker.js";
 
 const VERDICTS = new Set(["works", "offline_only", "fails"]);
 const DEVICES = new Set(["quest", "pico", "phone", "tablet", "other"]);
@@ -139,8 +139,8 @@ async function add(message, env, table, environment) {
   const voter = await voterHash(random, env.VOTER_SALT);
   const today = new Date().toISOString().slice(0, 10);
   const offline = fields.offline === true && fields.verdict === "works" ? 1 : 0;
-  await env.DB.prepare(`INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(message.appId, voter, fields.verdict, "admin", null, fields.device, offline, today).run();
+  await env.DB.prepare(`INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated, voted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(message.appId, voter, fields.verdict, "admin", null, fields.device, offline, today, thisHour()).run();
   log("add", { env: environment, appId: message.appId, voter, verdict: fields.verdict, device: fields.device });
   return json(200, { voter });
 }
@@ -348,7 +348,47 @@ async function removeIncompatible(message, env, _table, environment) {
   return json(200, { ok: true });
 }
 
-const WRITES = { "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove, "/console/api/report-handled": handleReport, "/console/api/incompatible-set": setIncompatible, "/console/api/reason-set": setReason, "/console/api/reason-remove": removeReason, "/console/api/incompatible-remove": removeIncompatible };
+// What is new since the console was last opened on it. The votes are told apart by the hour the relay saved them; a vote saved before that hour existed has no time, and
+// is told apart by its day instead. The games are told apart by day, and come from the catalog, which the page reads itself: the relay only keeps the day last seen.
+const SEEN_VOTES = { prod: "votes-prod", test: "votes-test" };
+
+/** The start of the next hour: a vote is stamped with the hour it was saved in, so everything saved up to now is before it. A vote saved in the rest of this very hour is shown at the following visit only. */
+const nextHour = (now) => thisHour(new Date(Math.floor(now.getTime() / 3_600_000) * 3_600_000 + 3_600_000));
+
+async function seenAt(env, name, first) {
+  const [row] = (await env.DB.prepare("SELECT at FROM console_seen WHERE name = ?").bind(name).all()).results;
+  if (row) return row.at;
+  // The first time, nothing is new: the start is now, so the whole history does not show up as news.
+  await env.DB.prepare("INSERT OR IGNORE INTO console_seen (name, at) VALUES (?, ?)").bind(name, first).run();
+  return first;
+}
+
+async function news(url, env) {
+  const environment = url.searchParams.get("env");
+  const table = TABLES[environment];
+  if (!table) return json(400, { error: "bad env" });
+  const now = new Date();
+  const votesSince = await seenAt(env, SEEN_VOTES[environment], nextHour(now));
+  const gamesSince = await seenAt(env, "games", now.toISOString().slice(0, 10));
+  const rows = (await env.DB.prepare(`SELECT app_id AS appId, COUNT(*) AS n, SUM(verdict = 'works') AS works, SUM(verdict = 'offline_only') AS offlineOnly, SUM(verdict = 'fails') AS fails
+    FROM ${table} WHERE (voted_at IS NOT NULL AND voted_at >= ?) OR (voted_at IS NULL AND updated >= ?) GROUP BY app_id ORDER BY n DESC, app_id`)
+    .bind(votesSince, votesSince.slice(0, 10)).all()).results;
+  return json(200, {
+    votesSince, gamesSince,
+    votes: { count: rows.reduce((sum, r) => sum + r.n, 0), works: rows.reduce((s, r) => s + r.works, 0), offlineOnly: rows.reduce((s, r) => s + r.offlineOnly, 0), fails: rows.reduce((s, r) => s + r.fails, 0), games: rows },
+  });
+}
+
+/** Marks the news of one list as seen, from now: the votes of this set, or the games. */
+async function seen(message, env, _table, environment) {
+  const now = new Date();
+  if (message.what === "votes") await env.DB.prepare("INSERT INTO console_seen (name, at) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET at = excluded.at").bind(SEEN_VOTES[environment], nextHour(now)).run();
+  else if (message.what === "games") await env.DB.prepare("INSERT INTO console_seen (name, at) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET at = excluded.at").bind("games", now.toISOString().slice(0, 10)).run();
+  else return json(400, { error: "bad what" });
+  return json(200, { ok: true });
+}
+
+const WRITES = { "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove, "/console/api/report-handled": handleReport, "/console/api/incompatible-set": setIncompatible, "/console/api/reason-set": setReason, "/console/api/reason-remove": removeReason, "/console/api/incompatible-remove": removeIncompatible, "/console/api/seen": seen };
 
 /** The routes of the console. Returns a response, or null when the path is not one of the console's. */
 export async function handleConsole(request, env) {
@@ -372,6 +412,7 @@ export async function handleConsole(request, env) {
     }
     if (url.pathname === "/console/api/votes") return request.method === "GET" ? await list(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/app") return request.method === "GET" ? await appInfo(url) : json(405, { error: "use GET" });
+    if (url.pathname === "/console/api/news") return request.method === "GET" ? await news(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/incompatible") return request.method === "GET" ? await listIncompatible(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/reports") return request.method === "GET" ? await listReports(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/report") return request.method === "GET" ? await downloadReport(url, env) : json(405, { error: "use GET" });
