@@ -1,5 +1,6 @@
-// A message to the developer's private Discord channel when a vote or a report arrives in production. It is for one person: the address of the webhook is a secret of the
-// relay (DISCORD_ADMIN_WEBHOOK), never written in a file or a log. Nothing about the player is sent (no id, no hash), and a failure here changes nothing: the vote or the
+// A message to the developer's private Discord channel when a vote or a report arrives: the one for production (secret DISCORD_ADMIN_WEBHOOK) and, apart, the one for the
+// test set (secret DISCORD_TEST_WEBHOOK), so the tries of a test build never mix with the real ones. It is for one person: the address of a webhook is a secret of the
+// relay, never written in a file or a log. Nothing about the player is sent (no id, no hash), and a failure here changes nothing: the vote or the
 // report is already saved, and the player gets the same answer.
 
 const WEBHOOK = /^https:\/\/(discord|discordapp)\.com\/api\/webhooks\/\d+\/[\w-]+$/;
@@ -39,10 +40,16 @@ const steam = (appId) => `https://store.steampowered.com/app/${appId}`;
 
 const field = (name, value, inline = true) => ({ name, value: String(value).slice(0, 200), inline });
 
-async function send(env, embed) {
-  if (!WEBHOOK.test(env.DISCORD_ADMIN_WEBHOOK ?? "")) return;
+/** The address of the channel for a set of votes ("prod" or "test"), or undefined when none is set. */
+const webhookOf = (env, environment) => (environment === "test" ? env.DISCORD_TEST_WEBHOOK : env.DISCORD_ADMIN_WEBHOOK);
+
+/** What the console shows to open a game in a set: production has its own address. */
+const consoleGame = (origin, appId, environment) => `${origin}/console#${appId}${environment === "test" ? "" : "/prod"}`;
+
+async function send(webhook, embed) {
+  if (!WEBHOOK.test(webhook ?? "")) return;
   try {
-    await fetch(env.DISCORD_ADMIN_WEBHOOK, {
+    await fetch(webhook, {
       method: "POST",
       headers: { "content-type": "application/json" },
       // No mention is ever parsed from a name or a version: only the developer's own notification settings decide.
@@ -60,15 +67,16 @@ function later(ctx, work) {
   return work;
 }
 
-export function notifyVote(env, ctx, origin, vote) {
-  if (!env.DISCORD_ADMIN_WEBHOOK) return undefined;
+export function notifyVote(env, ctx, origin, vote, environment = "prod") {
+  const webhook = webhookOf(env, environment);
+  if (!webhook) return undefined;
   return later(ctx, (async () => {
     const answer = ANSWERS[vote.verdict];
     const name = await gameName(vote.appId);
-    await send(env, {
-      title: `New vote: ${name}`,
-      url: `${origin}/console#${vote.appId}/prod`,
-      description: `[Steam](${steam(vote.appId)}) · [Console](${origin}/console#${vote.appId}/prod)`,
+    await send(webhook, {
+      title: `${environment === "test" ? "[TEST] " : ""}New vote: ${name}`,
+      url: consoleGame(origin, vote.appId, environment),
+      description: `[Steam](${steam(vote.appId)}) · [Console](${consoleGame(origin, vote.appId, environment)})`,
       thumbnail: { url: cover(vote.appId) },
       color: answer.color,
       fields: [
@@ -82,16 +90,17 @@ export function notifyVote(env, ctx, origin, vote) {
   })());
 }
 
-export function notifyReport(env, ctx, origin, report, verdict) {
-  if (!env.DISCORD_ADMIN_WEBHOOK) return undefined;
+export function notifyReport(env, ctx, origin, report, verdict, environment = "prod") {
+  const webhook = webhookOf(env, environment);
+  if (!webhook) return undefined;
   return later(ctx, (async () => {
     const name = await gameName(report.appId);
     const answer = verdict ? ANSWERS[verdict] : null;
-    await send(env, {
-      title: `New report: ${name}`,
-      url: `${origin}/console#reports/prod`,
+    await send(webhook, {
+      title: `${environment === "test" ? "[TEST] " : ""}New report: ${name}`,
+      url: `${origin}/console#reports${environment === "test" ? "" : "/prod"}`,
       // The download goes through the console, which only the developer can enter: anyone else who gets the link is turned away.
-      description: `${report.id ? `[Download the report](${origin}/console/api/report?env=prod&id=${report.id}) · ` : ""}[Steam](${steam(report.appId)}) · [Console](${origin}/console#${report.appId}/prod)`,
+      description: `${report.id ? `[Download the report](${origin}/console/api/report?env=${environment}&id=${report.id}) · ` : ""}[Steam](${steam(report.appId)}) · [Console](${consoleGame(origin, report.appId, environment)})`,
       thumbnail: { url: cover(report.appId) },
       color: answer ? answer.color : 0x9aa4b2,
       fields: [

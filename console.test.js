@@ -212,8 +212,18 @@ describe("adding a vote", () => {
         await Promise.all(waiting);
         return response;
       };
+      // The test set has no channel of its own here: nothing is told.
       assert.equal((await send("test")).status, 200);
       assert.equal(sent.length, 0);
+      // With one, the vote added in the test set goes there, and only there.
+      env.DISCORD_TEST_WEBHOOK = "https://discord.com/api/webhooks/987654321/test-token_XYZ";
+      const hooks = [];
+      const inner = globalThis.fetch;
+      globalThis.fetch = async (url, options) => { hooks.push(String(url)); return inner(url, options); };
+      assert.equal((await send("test")).status, 200);
+      globalThis.fetch = inner;
+      assert.deepEqual(hooks.filter((u) => u.startsWith("https://discord.com/")), ["https://discord.com/api/webhooks/987654321/test-token_XYZ"]);
+      sent.length = 0;
       assert.equal((await send("prod")).status, 200);
       assert.equal(sent.length, 1);
       assert.deepEqual(sent[0].embeds[0].fields.map((f) => f.value).slice(0, 3), ["Works", "Pico", "admin"]);

@@ -121,8 +121,8 @@ async function vote(request, env, table, ctx) {
     // What the database said stays here: the player only learns that it did not work.
     return reply(500, { error: "not saved" });
   }
-  // Only the real votes tell the developer: the test set is for trying things out.
-  if (table === "votes") notifyVote(env, ctx, new URL(request.url).origin, checked);
+  // Each set tells its own channel: the real votes the real one, the test set the one for tries.
+  if (table === "votes" || table === "votes_test") notifyVote(env, ctx, new URL(request.url).origin, checked, table === "votes" ? "prod" : "test");
   return reply(204);
 }
 
@@ -148,18 +148,20 @@ async function report(request, env, table, ctx) {
   } catch {
     return reply(500, { error: "not saved" });
   }
-  if (table === "reports") {
+  if (table === "reports" || table === "reports_test") {
+    const environment = table === "reports" ? "prod" : "test";
+    const votes = table === "reports" ? "votes" : "votes_test";
     let answer = null;
     let id = 0;
     try {
-      const [own] = (await env.DB.prepare("SELECT verdict FROM votes WHERE app_id = ? AND voter = ?").bind(meta.appId, voter).all()).results;
+      const [own] = (await env.DB.prepare(`SELECT verdict FROM ${votes} WHERE app_id = ? AND voter = ?`).bind(meta.appId, voter).all()).results;
       answer = own ? own.verdict : null;
       const [saved] = (await env.DB.prepare(`SELECT id FROM ${table} WHERE app_id = ? AND voter = ?`).bind(meta.appId, voter).all()).results;
       id = saved ? saved.id : 0;
     } catch {
       // The report is told without the player's answer, and without its link.
     }
-    notifyReport(env, ctx, new URL(request.url).origin, { id, appId: meta.appId, app: meta.app, device: meta.device, size: bytes.length }, answer);
+    notifyReport(env, ctx, new URL(request.url).origin, { id, appId: meta.appId, app: meta.app, device: meta.device, size: bytes.length }, answer, environment);
   }
   return reply(204);
 }

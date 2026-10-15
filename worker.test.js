@@ -528,6 +528,33 @@ describe("the messages to the developer's private channel", () => {
     assert.equal(sent.length, 0);
   });
 
+  it("tells the test set to its own channel, marked as a test, and never to the real one", async () => {
+    const TEST_HOOK = "https://discord.com/api/webhooks/987654321/test-token_XYZ";
+    env.DISCORD_TEST_WEBHOOK = TEST_HOOK;
+    assert.equal((await run(post(goodMessage({ appId: 846470, verdict: "works" }), "/test/vote"))).status, 204);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].url, TEST_HOOK);
+    const embed = sent[0].body.embeds[0];
+    assert.match(embed.title, /^\[TEST\] New vote: A Game/);
+    assert.ok(!embed.url.endsWith("/prod"), embed.url);
+    sent.length = 0;
+    assert.equal((await run(post(goodMessage({ appId: 846470, verdict: "fails" })))).status, 204);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].url, HOOK);
+    assert.ok(!sent[0].body.embeds[0].title.startsWith("[TEST]"));
+    // A report of the test set goes to the test channel too, with the download of the test set.
+    sent.length = 0;
+    await run(new Request(`https://relay.example.invalid/test/report?${new URLSearchParams({ appId: "846470", app: "0.7.4", device: "pico", voter: VOTER })}`, { method: "POST", body: ZIP }));
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].url, TEST_HOOK);
+    assert.match(sent[0].body.embeds[0].description, /report\?env=test&id=/);
+  });
+
+  it("tells nothing for the test set when it has no channel of its own, even if the real one is set", async () => {
+    assert.equal((await run(post(goodMessage(), "/test/vote"))).status, 204);
+    assert.equal(sent.length, 0);
+  });
+
   it("ignores an address that is not a Discord webhook", async () => {
     env.DISCORD_ADMIN_WEBHOOK = "https://evil.example.invalid/api/webhooks/1/x";
     assert.equal((await run(post(goodMessage()))).status, 204);
