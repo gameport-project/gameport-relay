@@ -40,6 +40,7 @@ input[type=search]:focus, .field:focus { border-color:rgba(255,255,255,.4); }
 .game .n { min-width:26px; text-align:center; padding:2px 8px; border-radius:999px; color:#10131a; font-size:12px; font-weight:800; }
 .n-works { background:#4cc38a; } .n-offline_only { background:#f0b24a; } .n-fails { background:#ef6b6b; }
 .only { margin-top:10px; width:100%; }
+.device-filter { margin-top:10px; width:100%; }
 .only[aria-pressed="true"] { background:#fff; color:#111; border-color:transparent; }
 .muted { color:var(--muted); }
 .hero { position:relative; min-height:200px; border-radius:16px; overflow:hidden; margin:-4px 0 16px; background:#0f131b center / cover no-repeat; display:flex; align-items:flex-end; }
@@ -117,6 +118,7 @@ a.btn { display:inline-flex; align-items:center; text-decoration:none; }
   <section class="panel">
     <h2>Games</h2>
     <input type="search" id="q" placeholder="Search a game" autocomplete="off" aria-label="Search a game">
+    <select id="device" class="device-filter" aria-label="Device"><option value="all">All devices</option></select>
     <button type="button" class="btn only" id="only" aria-pressed="false">Only games with votes</button>
     <div class="games" id="games"></div>
   </section>
@@ -128,7 +130,7 @@ a.btn { display:inline-flex; align-items:center; text-decoration:none; }
 var CATALOG = "https://raw.githubusercontent.com/gameport-project/gameport-catalog/main/v1/catalog.json";
 var DEVICES = ["quest", "pico", "phone", "tablet", "other"];
 var VERDICTS = { works: "Works", offline_only: "Offline only", fails: "Does not work" };
-var state = { env: "test", games: [], current: null, votes: [], counts: {}, onlyVoted: false, incompat: {}, reasons: [], view: "", extra: {}, unhandled: 0, waiting: {}, news: null };
+var state = { env: "test", games: [], current: null, votes: [], counts: {}, onlyVoted: false, incompat: {}, reasons: [], view: "", extra: {}, unhandled: 0, waiting: {}, news: null, device: "all" };
 
 function el(tag, attrs, children) {
   var node = document.createElement(tag);
@@ -291,7 +293,7 @@ function loadCounts() {
   var path = state.env === "prod" ? "/summary" : "/test/summary";
   return fetch(path).then(function (r) { return r.ok ? r.json() : { games: [] }; }).then(function (data) {
     state.counts = {};
-    (data.games || []).forEach(function (g) { state.counts[g.appId] = { total: g.works + g.offlineOnly + g.fails, works: g.works, offline_only: g.offlineOnly, fails: g.fails }; });
+    (data.games || []).forEach(function (g) { state.counts[g.appId] = { total: g.works + g.offlineOnly + g.fails, works: g.works, offline_only: g.offlineOnly, fails: g.fails, devices: g.devices || {} }; });
     // The votes of an app that is not in the catalog (a demo, a game without an Android version) still have to be reachable: the name comes from Steam.
     Object.keys(state.counts).forEach(function (id) {
       var n = Number(id);
@@ -299,7 +301,33 @@ function loadCounts() {
       state.extra[n] = { appid: n, name: "App " + n, vr: false, installable: true, extra: true };
       resolveName(state.extra[n]);
     });
-  }).catch(function () { state.counts = {}; });
+    drawDeviceOptions();
+  }).catch(function () { state.counts = {}; drawDeviceOptions(); });
+}
+
+/** The votes of a game for the device chosen in the filter (all of them for "All devices"), or null when there is none. */
+function deviceCounts(c) {
+  if (!c || !c.total) return null;
+  if (state.device === "all") return c;
+  var d = c.devices && c.devices[state.device];
+  if (!d) return null;
+  var total = d.works + d.offlineOnly + d.fails;
+  return total ? { total: total, works: d.works, offline_only: d.offlineOnly, fails: d.fails } : null;
+}
+
+/** The filter lists "All devices" and each device that has at least one vote in this set; a choice that has no vote any more goes back to all. */
+function drawDeviceOptions() {
+  var select = document.getElementById("device");
+  var present = {};
+  Object.keys(state.counts).forEach(function (id) {
+    var devices = state.counts[id].devices || {};
+    Object.keys(devices).forEach(function (d) { var v = devices[d]; if (v.works + v.offlineOnly + v.fails > 0) present[d] = true; });
+  });
+  if (state.device !== "all" && !present[state.device]) state.device = "all";
+  select.textContent = "";
+  select.appendChild(el("option", { value: "all", text: "All devices" }));
+  DEVICES.forEach(function (d) { if (present[d]) select.appendChild(el("option", { value: d, text: d.charAt(0).toUpperCase() + d.slice(1) })); });
+  select.value = state.device;
 }
 
 /** Asks the relay for the name Steam gives an app, and puts it in the game and everywhere the game is shown. */
@@ -347,11 +375,10 @@ function drawGames() {
   var box = document.getElementById("games");
   box.textContent = "";
   allGames().filter(function (g) {
-    if (state.onlyVoted && !(state.counts[g.appid] && state.counts[g.appid].total)) return false;
+    if ((state.onlyVoted || state.device !== "all") && !deviceCounts(state.counts[g.appid])) return false;
     return !q || g.name.toLowerCase().indexOf(q) !== -1 || String(g.appid) === q;
   }).slice(0, 200).forEach(function (g) {
-    var c = state.counts[g.appid];
-    var n = c && c.total ? c : null;
+    var n = deviceCounts(state.counts[g.appid]);
     var thumb = g.cover ? el("img", { src: g.cover, alt: "", loading: "lazy" }) : el("span");
     box.appendChild(el("button", { type: "button", class: "game", "aria-pressed": String(state.current && state.current.appid === g.appid), onclick: function () { state.current = g; state.view = "game"; drawGames(); loadVotes(); } }, [
       thumb,
@@ -601,10 +628,11 @@ function drawDetail() {
     reports.appendChild(el("h2", { text: "Reports of this game" }));
     reports.appendChild(reportsTable(data.reports, false, drawDetail));
   }).catch(function () {});
-  if (!state.votes.length) { panel.appendChild(el("p", { class: "muted", text: "No vote for this game." })); panel.appendChild(reports); return; }
+  var shown = state.votes.filter(function (v) { return state.device === "all" || v.device === state.device; });
+  if (!shown.length) { panel.appendChild(el("p", { class: "muted", text: state.votes.length ? "No vote for this game on this device." : "No vote for this game." })); panel.appendChild(reports); return; }
   var table = el("table", {}, [el("thead", {}, [el("tr", {}, ["Player", "Device", "Answer", "Offline", "GamePort", "Day", "State", ""].map(function (h) { return el("th", { text: h }); }))])]);
   var body = el("tbody");
-  state.votes.forEach(function (v) { body.appendChild(row(v)); });
+  shown.forEach(function (v) { body.appendChild(row(v)); });
   table.appendChild(body);
   panel.appendChild(el("div", { class: "scroll" }, [table]));
   panel.appendChild(el("div", { class: "gap" }, [reports]));
@@ -657,6 +685,11 @@ function row(v) {
 document.getElementById("b-test").addEventListener("click", function () { setEnv("test"); });
 document.getElementById("b-prod").addEventListener("click", function () { setEnv("prod"); });
 document.getElementById("q").addEventListener("input", drawGames);
+document.getElementById("device").addEventListener("change", function () {
+  state.device = this.value;
+  drawGames();
+  if (state.view === "game" && state.current) drawDetail();
+});
 document.getElementById("latest").addEventListener("click", showLatestReports);
 document.getElementById("reasons").addEventListener("click", showReasons);
 document.getElementById("news").addEventListener("click", showNews);

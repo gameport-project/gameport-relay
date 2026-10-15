@@ -154,6 +154,12 @@ describe("the page", () => {
     assert.ok(html.includes("PRODUCTION"));
     assert.ok(html.includes("TEST"));
   });
+
+  it("has a filter on the device, on all devices to start with", async () => {
+    const html = await (await ask("/console")).text();
+    assert.ok(html.includes('<select id="device"'));
+    assert.ok(html.includes('<option value="all">All devices</option>'));
+  });
 });
 
 describe("reading the votes", () => {
