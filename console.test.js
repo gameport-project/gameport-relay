@@ -271,7 +271,7 @@ describe("changing any vote", () => {
     assert.deepEqual([rows()[0].verdict, rows()[0].offline], ["fails", 0]);
   });
 
-  it("marks a vote as fixed: it is no longer counted, and nothing else is touched", async () => {
+  it("marks a vote as fixed: it counts as works, and nothing else is touched", async () => {
     vote(5, "aaaaaaaaaaaa", { verdict: "fails" });
     vote(5, "bbbbbbbbbbbb", { verdict: "works" });
     assert.equal((await summary())[0].fails, 1);
@@ -280,7 +280,11 @@ describe("changing any vote", () => {
     const today = new Date().toISOString().slice(0, 10);
     assert.deepEqual(rows().map((r) => [r.voter, r.fixed, r.fixed_in]), [["aaaaaaaaaaaa", today, "0.9.0"], ["bbbbbbbbbbbb", null, null]]);
     const [game] = await summary();
-    assert.deepEqual([game.works, game.fails], [1, 0]);
+    assert.deepEqual([game.works, game.fails], [2, 0]);
+    assert.equal(rows()[0].verdict, "fails");
+    // The site is told the day, and the version, without a word about the player.
+    assert.deepEqual(game.fixes, [{ device: "quest", day: today, version: "0.9.0" }]);
+    assert.ok(!JSON.stringify(game).includes("aaaaaaaaaaaa"));
   });
 
   it("keeps the first day it was marked, even when it is marked again", async () => {
@@ -290,10 +294,10 @@ describe("changing any vote", () => {
     assert.equal(rows()[0].fixed, "2026-01-02");
   });
 
-  it("counts a vote again, and forgets where it was fixed", async () => {
+  it("counts a vote as it was again, and forgets where it was fixed", async () => {
     vote(5, "aaaaaaaaaaaa", { verdict: "fails" });
     await ask("/console/api/change", { method: "POST", body: { env: "prod", appId: 5, voter: "aaaaaaaaaaaa", fixed: true, fixedIn: "0.9.0" } });
-    assert.deepEqual(await summary(), []);
+    assert.deepEqual([(await summary())[0].works, (await summary())[0].fails], [1, 0]);
     await ask("/console/api/change", { method: "POST", body: { env: "prod", appId: 5, voter: "aaaaaaaaaaaa", fixed: false } });
     assert.deepEqual([rows()[0].fixed, rows()[0].fixed_in], [null, null]);
     assert.equal((await summary())[0].fails, 1);
@@ -303,7 +307,7 @@ describe("changing any vote", () => {
     await worker.fetch(new Request(`${ORIGIN}/vote`, { method: "POST", body: JSON.stringify({ v: 1, appId: 5, verdict: "fails", app: "0.7.2", device: "quest", voter: VOTER }) }), env);
     const voter = rows()[0].voter;
     await ask("/console/api/change", { method: "POST", body: { env: "prod", appId: 5, voter, fixed: true, fixedIn: "0.9.0" } });
-    assert.deepEqual(await summary(), []);
+    assert.deepEqual([(await summary())[0].works, (await summary())[0].fails], [1, 0]);
     await worker.fetch(new Request(`${ORIGIN}/vote`, { method: "POST", body: JSON.stringify({ v: 1, appId: 5, verdict: "fails", app: "0.9.1", device: "quest", voter: VOTER }) }), env);
     assert.deepEqual([rows()[0].fixed, rows()[0].fixed_in], [null, null]);
     assert.equal((await summary())[0].fails, 1);

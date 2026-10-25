@@ -68,7 +68,6 @@ select { height:38px; padding:0 10px; background:#0f131b; border:1px solid var(-
 table { width:100%; border-collapse:collapse; }
 th { text-align:left; color:var(--muted); font-weight:500; font-size:13px; padding:6px 8px; }
 td { padding:8px; border-top:1px solid var(--line); vertical-align:middle; }
-tr.fixed td:not(:last-child) { opacity:.55; }
 td { white-space:nowrap; }
 .actions { display:flex; gap:6px; flex-wrap:nowrap; }
 .scroll { overflow-x:auto; }
@@ -291,7 +290,8 @@ function drawReasons() {
 
 function loadCounts() {
   var path = state.env === "prod" ? "/summary" : "/test/summary";
-  return fetch(path).then(function (r) { return r.ok ? r.json() : { games: [] }; }).then(function (data) {
+  // Never from the browser's memory: the summary is kept five minutes for the public, and a vote just changed has to show at once.
+  return fetch(path, { cache: "no-store" }).then(function (r) { return r.ok ? r.json() : { games: [] }; }).then(function (data) {
     state.counts = {};
     (data.games || []).forEach(function (g) { state.counts[g.appId] = { total: g.works + g.offlineOnly + g.fails, works: g.works, offline_only: g.offlineOnly, fails: g.fails, devices: g.devices || {} }; });
     // The votes of an app that is not in the catalog (a demo, a game without an Android version) still have to be reachable: the name comes from Steam.
@@ -591,7 +591,7 @@ function drawDetail() {
   panel.appendChild(hero);
 
   var totals = el("div", { class: "totals" });
-  var counted = state.votes.filter(function (v) { return !v.fixed; });
+  var counted = state.votes.map(function (v) { return Object.assign({}, v, { verdict: v.fixed ? "works" : v.verdict }); });
   DEVICES.forEach(function (d) {
     var own = counted.filter(function (v) { return v.device === d; });
     if (!own.length) return;
@@ -641,28 +641,30 @@ function drawDetail() {
 function row(v) {
   var g = state.current;
   var device = select(DEVICES, v.device);
-  var verdict = select(Object.keys(VERDICTS), v.verdict, VERDICTS);
+  // A vote marked fixed counts, and shows, as "works".
+  var answer = v.fixed ? "works" : v.verdict;
+  var verdict = select(Object.keys(VERDICTS), answer, VERDICTS);
   var offline = el("input", { type: "checkbox" });
   offline.checked = v.offline;
-  var dirty = function () { return device.value !== v.device || verdict.value !== v.verdict || offline.checked !== v.offline; };
+  var dirty = function () { return device.value !== v.device || verdict.value !== answer || offline.checked !== v.offline; };
   var save = el("button", { type: "button", class: "btn", text: "Save", disabled: "disabled", onclick: function () {
-    if (!confirmWrite("Change a vote of " + g.name + ": " + v.device + ", " + VERDICTS[v.verdict] + " becomes " + device.value + ", " + VERDICTS[verdict.value] + ".")) return;
+    if (!confirmWrite("Change a vote of " + g.name + ": " + v.device + ", " + VERDICTS[answer] + " becomes " + device.value + ", " + VERDICTS[verdict.value] + ".")) return;
     call("/console/api/change", { appId: g.appid, voter: v.voter, device: device.value, verdict: verdict.value, offline: offline.checked })
       .then(function () { toast("Saved"); loadVotes(); loadCounts().then(drawGames); }).catch(function (e) { toast(e.message, true); });
   } });
   [device, verdict, offline].forEach(function (n) { n.addEventListener("change", function () { if (dirty()) save.removeAttribute("disabled"); else save.setAttribute("disabled", "disabled"); }); });
 
-  var fixedBtn = el("button", { type: "button", class: "btn", text: v.fixed ? "Count again" : "Mark fixed", onclick: function () {
+  var fixedBtn = el("button", { type: "button", class: "btn", text: v.fixed ? "Not fixed" : "Mark fixed", onclick: function () {
     if (v.fixed) {
-      if (!confirmWrite("Count this vote again: " + g.name + ", " + v.device + ", " + VERDICTS[v.verdict] + ".")) return;
-      call("/console/api/change", { appId: g.appid, voter: v.voter, fixed: false }).then(function () { toast("Counted again"); loadVotes(); loadCounts().then(drawGames); }).catch(function (e) { toast(e.message, true); });
+      if (!confirmWrite("Count this vote as it was, not fixed: " + g.name + ", " + v.device + ", " + VERDICTS[v.verdict] + ".")) return;
+      call("/console/api/change", { appId: g.appid, voter: v.voter, fixed: false }).then(function () { toast("Back to the answer given"); loadVotes(); loadCounts().then(drawGames); }).catch(function (e) { toast(e.message, true); });
       return;
     }
     var where = window.prompt("Fixed in which version? (optional, for example 0.9.0)", "");
     if (where === null) return;
     where = where.trim();
     if (where && !/^[0-9A-Za-z._ -]{1,32}$/.test(where)) { toast("Letters, digits, dots, dashes and spaces only", true); return; }
-    if (!confirmWrite("Mark as fixed, no longer counted: " + g.name + ", " + v.device + ", " + VERDICTS[v.verdict] + ".")) return;
+    if (!confirmWrite("Mark as fixed, counted as works: " + g.name + ", " + v.device + ", " + VERDICTS[v.verdict] + ".")) return;
     var message = { appId: g.appid, voter: v.voter, fixed: true };
     if (where) message.fixedIn = where;
     call("/console/api/change", message).then(function () { toast("Marked fixed"); loadVotes(); loadCounts().then(drawGames); }).catch(function (e) { toast(e.message, true); });
@@ -672,8 +674,8 @@ function row(v) {
     call("/console/api/remove", { appId: g.appid, voter: v.voter }).then(function () { toast("Deleted"); loadVotes(); loadCounts().then(drawGames); }).catch(function (e) { toast(e.message, true); });
   } });
 
-  var state2 = v.fixed ? "Fixed " + v.fixed + (v.fixedIn ? " in " + v.fixedIn : "") : "Counted";
-  return el("tr", { class: "v-" + v.verdict + (v.fixed ? " fixed" : "") }, [
+  var state2 = v.fixed ? "Fixed " + v.fixed + (v.fixedIn ? " in " + v.fixedIn : "") + ", was " + VERDICTS[v.verdict] : "Counted";
+  return el("tr", { class: "v-" + answer }, [
     el("td", { class: "muted", text: v.voter.slice(0, 6) + (v.app === "admin" ? " (admin)" : "") }),
     el("td", {}, [device]), el("td", {}, [verdict]), el("td", {}, [offline]),
     el("td", { text: v.app }), el("td", { text: v.updated }),

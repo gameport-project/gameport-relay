@@ -90,7 +90,8 @@ const upsert = (table) => `INSERT INTO ${table} (app_id, voter, verdict, app, ga
 
 /** The relay's own clock, UTC, rounded down to the hour: the app never sends a time, and none of a player's is used. */
 export const thisHour = (now = new Date()) => `${now.toISOString().slice(0, 13)}:00:00Z`;
-const summaryQuery = (table) => `SELECT app_id AS appId, device, SUM(verdict = 'works') AS works, SUM(verdict = 'offline_only') AS offlineOnly, SUM(verdict = 'fails') AS fails, SUM(verdict = 'works' AND offline = 1) AS worksOffline FROM ${table} WHERE fixed IS NULL GROUP BY app_id, device ORDER BY app_id, device`;
+// A vote marked as fixed counts as "works": the problem it reported was solved, whatever it said.
+const summaryQuery = (table) => `SELECT app_id AS appId, device, SUM(verdict = 'works') AS works, SUM(verdict = 'offline_only') AS offlineOnly, SUM(verdict = 'fails') AS fails, SUM(verdict = 'works' AND offline = 1) AS worksOffline FROM (SELECT app_id, device, offline, CASE WHEN fixed IS NULL THEN verdict ELSE 'works' END AS verdict FROM ${table}) GROUP BY app_id, device ORDER BY app_id, device`;
 
 function reply(status, body, headers = {}) {
   const json = body !== undefined && typeof body === "object";
@@ -192,8 +193,10 @@ async function admin(request, env, table, id) {
 /** The totals per game, nothing about any player. The compatibility file is built from this. */
 async function summary(env, table) {
   let rows;
+  let fixes;
   try {
     rows = (await env.DB.prepare(summaryQuery(table)).all()).results;
+    fixes = (await env.DB.prepare(`SELECT DISTINCT app_id AS appId, device, fixed AS day, fixed_in AS version FROM ${table} WHERE fixed IS NOT NULL ORDER BY app_id, device, fixed, fixed_in`).all()).results;
   } catch {
     return reply(500, { error: "not read" });
   }
@@ -207,6 +210,12 @@ async function summary(env, table) {
     game.worksOffline += row.worksOffline;
     game.devices[row.device] = { works: row.works, offlineOnly: row.offlineOnly, fails: row.fails, worksOffline: row.worksOffline };
     byGame.set(row.appId, game);
+  }
+  // The day a problem was solved, and in which version when it is known: shown on the site, and counted as "works" above.
+  for (const fix of fixes) {
+    const game = byGame.get(fix.appId);
+    if (!game) continue;
+    (game.fixes ??= []).push(fix.version ? { device: fix.device, day: fix.day, version: fix.version } : { device: fix.device, day: fix.day });
   }
   return reply(200, { v: 1, games: [...byGame.values()] }, { "cache-control": "public, max-age=300" });
 }

@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS votes (
   device  TEXT    NOT NULL,  -- quest, pico, phone, tablet or other
   offline INTEGER NOT NULL DEFAULT 0,  -- 1 when it worked with GamePort's offline mode on, which only a vote that says "works" can carry
   updated TEXT    NOT NULL,  -- the day, YYYY-MM-DD: no finer than that
-  fixed   TEXT,              -- the day the problem was solved: from then on the vote is no longer counted; empty while it counts
+  fixed   TEXT,              -- the day the problem was solved: from then on the vote counts as "works", whatever its answer; empty while it is not fixed
   fixed_in TEXT,             -- where it was solved, free text (a version of GamePort); only for the developer
   voted_at TEXT,             -- when the relay saved the vote, UTC, rounded down to the hour (YYYY-MM-DDTHH:00:00Z): only for the developer's console; empty for the votes saved before it existed
   PRIMARY KEY (app_id, voter)
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS votes_test (
   device  TEXT    NOT NULL,  -- quest, pico, phone, tablet or other
   offline INTEGER NOT NULL DEFAULT 0,  -- 1 when it worked with GamePort's offline mode on, which only a vote that says "works" can carry
   updated TEXT    NOT NULL,  -- the day, YYYY-MM-DD: no finer than that
-  fixed   TEXT,              -- the day the problem was solved: from then on the vote is no longer counted; empty while it counts
+  fixed   TEXT,              -- the day the problem was solved: from then on the vote counts as "works", whatever its answer; empty while it is not fixed
   fixed_in TEXT,             -- where it was solved, free text (a version of GamePort); only for the developer
   voted_at TEXT,             -- when the relay saved the vote, UTC, rounded down to the hour (YYYY-MM-DDTHH:00:00Z): only for the developer's console; empty for the votes saved before it existed
   PRIMARY KEY (app_id, voter)
