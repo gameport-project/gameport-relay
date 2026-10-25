@@ -76,6 +76,18 @@ describe("who may come in", () => {
     assert.equal((await ask("/console")).status, 200);
   });
 
+  it("serves the page at an address that names the set and what is open, so a refresh comes back to the same place", async () => {
+    for (const path of ["/console/test", "/console/prod", "/console/prod/", "/console/test/1125240", "/console/prod/reports", "/console/prod/news", "/console/test/reasons"]) {
+      const response = await ask(path);
+      assert.equal(response.status, 200, path);
+      assert.match(response.headers.get("content-type"), /text\/html/, path);
+    }
+    for (const path of ["/console/other", "/console/prod/other", "/console/prod/1/2", "/console/prod/12345678901", "/console/reports"]) {
+      assert.equal((await ask(path)).status, 404, path);
+    }
+    assert.equal((await ask("/console/prod/1125240", { jwt: null })).status, 404);
+  });
+
   it("does not exist without the three secrets, whatever the token says", async () => {
     for (const missing of ["ACCESS_TEAM", "ACCESS_AUD", "ADMIN_EMAIL"]) {
       const without = { ...env };

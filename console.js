@@ -393,6 +393,9 @@ async function seen(message, env, _table, environment) {
 
 const WRITES = { "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove, "/console/api/report-handled": handleReport, "/console/api/incompatible-set": setIncompatible, "/console/api/reason-set": setReason, "/console/api/reason-remove": removeReason, "/console/api/incompatible-remove": removeIncompatible, "/console/api/seen": seen };
 
+/** The page answers at /console and at an address that names the set and what is open: /console/prod, /console/test/1125240, /console/prod/reports, /console/prod/news, /console/test/reasons. */
+const PAGE_PATH = /^\/console\/?$|^\/console\/(test|prod)(\/(\d{1,10}|reports|news|reasons))?\/?$/;
+
 /** The routes of the console. Returns a response, or null when the path is not one of the console's. */
 export async function handleConsole(request, env, ctx) {
   const url = new URL(request.url);
@@ -400,7 +403,7 @@ export async function handleConsole(request, env, ctx) {
   if (!(await isSignedIn(request, env))) return notFound();
   if (!env.DB) return json(500, { error: "relay not configured" });
   try {
-    if (url.pathname === "/console" || url.pathname === "/console/") {
+    if (PAGE_PATH.test(url.pathname)) {
       if (request.method !== "GET") return json(405, { error: "use GET" });
       const nonce = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
       return new Response(consolePage(nonce), {

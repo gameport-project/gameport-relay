@@ -129,7 +129,7 @@ a.btn { display:inline-flex; align-items:center; text-decoration:none; }
 var CATALOG = "https://raw.githubusercontent.com/gameport-project/gameport-catalog/main/v1/catalog.json";
 var DEVICES = ["quest", "pico", "phone", "tablet", "other"];
 var VERDICTS = { works: "Works", offline_only: "Offline only", fails: "Does not work" };
-var state = { env: "test", games: [], current: null, votes: [], counts: {}, onlyVoted: false, incompat: {}, reasons: [], view: "", extra: {}, unhandled: 0, waiting: {}, news: null, device: "all" };
+var state = { env: "test", games: [], current: null, votes: [], counts: {}, onlyVoted: false, incompat: {}, reasons: [], view: "", extra: {}, unhandled: 0, waiting: {}, news: null, device: "all", ready: false };
 
 function el(tag, attrs, children) {
   var node = document.createElement(tag);
@@ -169,6 +169,7 @@ function confirmWrite(text) {
 
 function setEnv(env) {
   state.env = env;
+  syncUrl();
   document.body.className = env;
   document.getElementById("b-test").setAttribute("aria-pressed", String(env === "test"));
   document.getElementById("b-prod").setAttribute("aria-pressed", String(env === "prod"));
@@ -366,7 +367,16 @@ function majority(c) {
   return "works";
 }
 
+/** The address says the set and what is open (/console/prod/1125240, /console/test/news): a refresh, a copied link or a bookmark comes back to the same place. */
+function syncUrl() {
+  if (!state.ready) return;
+  var tail = state.view === "game" && state.current ? "/" + state.current.appid : state.view === "reports" || state.view === "news" || state.view === "reasons" ? "/" + state.view : "";
+  var path = "/console/" + state.env + tail + (state.onlyVoted ? "?voted" : "");
+  if (location.pathname + location.search !== path) history.pushState(null, "", path);
+}
+
 function drawGames() {
+  syncUrl();
   var q = document.getElementById("q").value.trim().toLowerCase();
   if (/^\\d{1,10}$/.test(q) && Number(q) >= 1 && Number(q) <= 2000000000 && !allGames().some(function (g) { return g.appid === Number(q); })) {
     state.extra[Number(q)] = { appid: Number(q), name: "App " + q, vr: false, installable: true, extra: true };
@@ -597,7 +607,7 @@ function drawDetail() {
   links.appendChild(steamLink);
   {
     demos.forEach(function (d) {
-      links.appendChild(el("a", { class: "pill", href: "#" + d.appid + (state.env === "prod" ? "/prod" : ""), text: "Demo: " + d.name, onclick: function () { setTimeout(function () { location.reload(); }, 0); } }));
+      links.appendChild(el("a", { class: "pill", href: "/console/" + state.env + "/" + d.appid, text: "Demo: " + d.name }));
       links.appendChild(el("a", { class: "pill", href: "https://store.steampowered.com/app/" + d.appid, target: "_blank", rel: "noopener", text: "Steam" }));
     });
     if (g.parent) {
@@ -722,21 +732,28 @@ document.getElementById("only").addEventListener("click", function () {
 
 fetch(CATALOG).then(function (r) { return r.json(); }).then(function (data) {
   state.games = data.apps.slice().sort(function (a, b) { return a.name.localeCompare(b.name); });
-  // An address like #1125240 opens that game, #1125240/prod opens it in production, #voted lists only the games with votes, and #reports (or #reports/prod) shows the latest reports.
-  if (location.hash === "#voted") { state.onlyVoted = true; document.getElementById("only").setAttribute("aria-pressed", "true"); }
-  var link = location.hash.match(/^#(\\d+)(\\/prod)?$/);
-  var inReports = location.hash.match(/^#reports(\\/prod)?$/);
-  setEnv((link && link[2]) || (inReports && inReports[1]) ? "prod" : "test");
-  if (inReports) showLatestReports();
-  else if (link && !state.games.some(function (g) { return g.appid === Number(link[1]); })) {
-    var other = { appid: Number(link[1]), name: "App " + link[1], vr: false, installable: true, extra: true };
-    state.extra[other.appid] = other; state.current = other; state.view = "game"; resolveName(other); loadVotes();
+  // The address says what to open: /console/prod/1125240 a game in production, /console/test/reports or /news or /reasons a page, ?voted only the games with votes.
+  // The old addresses (#1125240/prod, #reports, #voted) still open the same thing, and are rewritten.
+  var route = location.pathname.match(/^\\/console\\/(test|prod)(?:\\/(\\d+|reports|news|reasons))?\\/?$/);
+  var env = route ? route[1] : "test";
+  var section = route ? route[2] : null;
+  var old = location.hash.match(/^#(?:(\\d+)|(reports))(\\/prod)?$/);
+  if (!route && old) { env = old[3] ? "prod" : "test"; section = old[1] || old[2]; }
+  if (location.search === "?voted" || location.hash === "#voted") { state.onlyVoted = true; document.getElementById("only").setAttribute("aria-pressed", "true"); }
+  setEnv(env);
+  if (section === "reports") showLatestReports();
+  else if (section === "news") showNews();
+  else if (section === "reasons") showReasons();
+  else if (section) {
+    var id = Number(section);
+    var found = state.games.filter(function (g) { return g.appid === id; })[0];
+    if (!found) { found = { appid: id, name: "App " + id, vr: false, installable: true, extra: true }; state.extra[id] = found; resolveName(found); }
+    state.current = found; state.view = "game"; drawGames(); loadVotes();
   }
-  if (link) {
-    var found = state.games.filter(function (g) { return g.appid === Number(link[1]); })[0];
-    if (found) { state.current = found; state.view = "game"; drawGames(); loadVotes(); }
-  }
+  state.ready = true;
+  history.replaceState(null, "", "/console/" + state.env + (section ? "/" + section : "") + (state.onlyVoted ? "?voted" : ""));
 }).catch(function () { toast("The catalog could not be read", true); setEnv("test"); });
+window.addEventListener("popstate", function () { location.reload(); });
 </script>
 </body>
 </html>`;
