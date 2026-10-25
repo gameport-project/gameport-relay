@@ -501,7 +501,10 @@ describe("the messages to the developer's private channel", () => {
     waiting = [];
     realFetch = globalThis.fetch;
     globalThis.fetch = async (url, options) => {
-      if (String(url).startsWith("https://store.steampowered.com/")) return new Response(JSON.stringify({ 846470: { success: true, data: { name: "A Game" } } }));
+      if (String(url).startsWith("https://store.steampowered.com/")) return new Response(JSON.stringify({ 846470: { success: true, data: { name: "A Game" } }, 5219700: { success: true, data: { name: "A Demo" } } }));
+      if (String(url).startsWith("https://raw.githubusercontent.com/")) return new Response(JSON.stringify({ apps: [{ appid: 5219700, parent: 3456660, cover: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/5219700/abc123/library_capsule.jpg", header: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/5219700/def456/header.jpg" }] }));
+      // Steam serves pictures for every app but the demo, whose own pictures are missing: the full game's stand in.
+      if (options?.method === "HEAD") return new Response(null, { status: String(url).includes("/5219700/") ? 404 : 200 });
       sent.push({ url: String(url), body: JSON.parse(options.body) });
       return new Response(null, { status: 204 });
     };
@@ -565,6 +568,14 @@ describe("the messages to the developer's private channel", () => {
     globalThis.fetch = async () => { throw new Error("down"); };
     assert.equal((await run(post(goodMessage()))).status, 204);
     assert.equal(rowsOf(db).length, 1);
+  });
+
+  it("shows a demo's cover the way the app does, the full game's when the demo has none, and opens the console on the game in its set", async () => {
+    await run(post(goodMessage({ appId: 5219700, verdict: "works" })));
+    const embed = sent[0].body.embeds[0];
+    assert.match(embed.title, /A Demo/);
+    assert.match(embed.thumbnail.url, /\/3456660\/library_600x900\.jpg$/);
+    assert.equal(embed.url, "https://relay.example.invalid/console/prod/5219700");
   });
 
   it("tells a real report with the player's own answer for that game, and not a report of the test set", async () => {
