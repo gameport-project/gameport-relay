@@ -206,6 +206,14 @@ describe("adding a vote", () => {
     assert.deepEqual(await summary(), []);
   });
 
+  it("lets the developer give the version of GamePort of a vote he adds, and says admin when he gives none", async () => {
+    const add = (extra) => ask("/console/api/add", { method: "POST", body: { env: "prod", appId: 7, device: "pico", verdict: "works", ...extra } });
+    assert.equal((await add({ app: "0.8.1" })).status, 200);
+    assert.equal((await add({})).status, 200);
+    assert.deepEqual(rows().map((r) => r.app).sort(), ["0.8.1", "admin"]);
+    for (const app of ["<script>", "x".repeat(33), 7, ""].slice(0, 3)) assert.equal((await add({ app })).status, 400, String(app));
+  });
+
   it("tells the private channel of a vote added in production, as admin, and not one added in the test set", async () => {
     const realFetch = globalThis.fetch;
     const sent = [];

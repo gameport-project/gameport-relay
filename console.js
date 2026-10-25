@@ -140,11 +140,14 @@ async function add(message, env, table, environment, ctx, origin) {
   const voter = await voterHash(random, env.VOTER_SALT);
   const today = new Date().toISOString().slice(0, 10);
   const offline = fields.offline === true && fields.verdict === "works" ? 1 : 0;
+  // The version of GamePort the vote is told to come from, typed by the developer; "admin" when none is given.
+  if (message.app !== undefined && (typeof message.app !== "string" || !/^[0-9A-Za-z._-]{1,32}$/.test(message.app))) return json(400, { error: "bad app" });
+  const app = message.app || "admin";
   await env.DB.prepare(`INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated, voted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(message.appId, voter, fields.verdict, "admin", null, fields.device, offline, today, thisHour()).run();
+    .bind(message.appId, voter, fields.verdict, app, null, fields.device, offline, today, thisHour()).run();
   log("add", { env: environment, appId: message.appId, voter, verdict: fields.verdict, device: fields.device });
-  // Told like a player's vote, so the channel can be tried from here; it says "admin" where a player's says the version of GamePort.
-  notifyVote(env, ctx, origin, { appId: message.appId, verdict: fields.verdict, device: fields.device, offline: offline === 1, app: "admin" }, environment);
+  // Told like a player's vote, so the channel can be tried from here; it says the version typed here, or "admin" when none, where a player's says the version of GamePort.
+  notifyVote(env, ctx, origin, { appId: message.appId, verdict: fields.verdict, device: fields.device, offline: offline === 1, app }, environment);
   return json(200, { voter });
 }
 

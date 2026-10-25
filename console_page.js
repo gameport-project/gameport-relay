@@ -57,6 +57,7 @@ input[type=search]:focus, .field:focus { border-color:rgba(255,255,255,.4); }
 tr td:first-child { border-left:4px solid transparent; }
 tr.v-works td:first-child { border-left-color:#4cc38a; } tr.v-offline_only td:first-child { border-left-color:#f0b24a; } tr.v-fails td:first-child { border-left-color:#ef6b6b; }
 .chip { padding:3px 12px; border-radius:999px; background:rgba(255,255,255,.08); border:1px solid var(--line); font-size:13px; }
+.add .field { width:210px; height:38px; cursor:text; }
 .add { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:12px; border:1px dashed var(--line); border-radius:12px; margin-bottom:16px; }
 select, .field { cursor:pointer; }
 select { height:38px; padding:0 10px; background:#0f131b; border:1px solid var(--line); border-radius:10px; }
@@ -644,12 +645,16 @@ function drawDetail() {
   var verdict = select(Object.keys(VERDICTS), "works", VERDICTS);
   var offline = el("input", { type: "checkbox", id: "add-offline" });
   var offlineLabel = el("label", { class: "muted" }, [offline, document.createTextNode(" tried offline")]);
+  var version = el("input", { type: "text", class: "field", "aria-label": "GamePort version", placeholder: "GamePort version (optional)", maxlength: "32", size: "22" });
   var add = el("button", { type: "button", class: "btn fill", text: "Add a vote", onclick: function () {
     var message = { appId: g.appid, device: device.value, verdict: verdict.value, offline: offline.checked };
+    var typed = version.value.trim();
+    if (typed && !/^[0-9A-Za-z._-]{1,32}$/.test(typed)) { toast("The version: letters, digits, dots, dashes only", true); return; }
+    if (typed) message.app = typed;
     if (!confirmWrite("Add a vote: " + g.name + ", " + device.value + ", " + VERDICTS[verdict.value] + ".")) return;
     call("/console/api/add", message).then(function () { toast("Vote added"); loadVotes(); loadCounts().then(drawGames); }).catch(function (e) { toast(e.message, true); });
   } });
-  panel.appendChild(el("div", { class: "add" }, [el("strong", { text: "New vote" }), device, verdict, offlineLabel, add]));
+  panel.appendChild(el("div", { class: "add" }, [el("strong", { text: "New vote" }), device, verdict, version, offlineLabel, add]));
 
   var reports = el("div");
   call("/console/api/reports?env=" + state.env + "&appId=" + g.appid).then(function (data) {
