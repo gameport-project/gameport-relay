@@ -222,6 +222,42 @@ async function appInfo(url) {
   return json(200, info);
 }
 
+const appPrices = new Map();
+
+/**
+ * The price of an app on Steam's store, in euros, for the Steam button of the console: what it costs now, what it cost before when it is on sale, and the
+ * discount. Only a number reaches the address. An answer is kept an hour; when Steam does not answer, nothing is said and the next look asks again.
+ */
+async function appPrice(url) {
+  const id = Number(url.searchParams.get("id"));
+  if (!validId(id)) return json(400, { error: "bad id" });
+  const kept = appPrices.get(id);
+  if (kept && Date.now() - kept.at < NAME_TTL_MS) return json(200, kept.price);
+  const nothing = { id, free: false, price: null, before: null, discount: 0 };
+  try {
+    const answer = await fetch(`https://store.steampowered.com/api/appdetails?appids=${id}&filters=basic,price_overview&cc=fr&l=english`, {
+      headers: { "user-agent": "gameport-relay", accept: "application/json" },
+      signal: AbortSignal.timeout(5000),
+    });
+    const data = answer.ok ? (await answer.json())[String(id)] : null;
+    if (!data || !data.success || !data.data) return json(200, nothing);
+    const overview = data.data.price_overview;
+    const text = (value) => (typeof value === "string" && value.length <= 24 ? value : null);
+    const discount = Number.isInteger(overview?.discount_percent) ? overview.discount_percent : 0;
+    const price = {
+      id,
+      free: data.data.is_free === true,
+      price: text(overview?.final_formatted),
+      before: discount > 0 ? text(overview?.initial_formatted) : null,
+      discount,
+    };
+    appPrices.set(id, { at: Date.now(), price });
+    return json(200, price);
+  } catch {
+    return json(200, nothing);
+  }
+}
+
 const fromBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 
 /**
@@ -421,6 +457,7 @@ export async function handleConsole(request, env, ctx) {
     }
     if (url.pathname === "/console/api/votes") return request.method === "GET" ? await list(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/app") return request.method === "GET" ? await appInfo(url) : json(405, { error: "use GET" });
+    if (url.pathname === "/console/api/price") return request.method === "GET" ? await appPrice(url) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/news") return request.method === "GET" ? await news(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/incompatible") return request.method === "GET" ? await listIncompatible(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/reports") return request.method === "GET" ? await listReports(url, env) : json(405, { error: "use GET" });

@@ -575,6 +575,15 @@ function showLatestReports() {
   }).catch(function (e) { toast(e.message, true); });
 }
 
+/** Writes the price of an app after the text of a button: free, or what it costs and, on sale, the discount. */
+function addPrice(link, appId, game, skipFree) {
+  call("/console/api/price?id=" + appId).then(function (p) {
+    if (state.current !== game) return;
+    var text = p.free ? (skipFree ? "" : "Free") : p.price ? (p.discount ? "-" + p.discount + "% " : "") + p.price : "";
+    if (text) link.appendChild(document.createTextNode(" · " + text));
+  }).catch(function () {});
+}
+
 /** The Steam logo, drawn as an element: no image to load, so nothing for the page's policy to refuse. */
 function steamLogo() {
   var ns = "http://www.w3.org/2000/svg";
@@ -606,13 +615,20 @@ function drawDetail() {
   steamLink.appendChild(steamLogo());
   steamLink.appendChild(document.createTextNode("Steam"));
   links.appendChild(steamLink);
+  // The price, as the store shows it, inside the button: free, or what it costs and, on sale, the discount. "Free" says nothing of a demo or a playtest.
+  addPrice(steamLink, g.appid, g, g.type === "demo" || g.type === "playtest");
   {
     demos.forEach(function (d) {
       links.appendChild(el("a", { class: "pill", href: "/console/" + state.env + "/" + d.appid, text: "Demo: " + d.name }));
       links.appendChild(el("a", { class: "pill", href: "https://store.steampowered.com/app/" + d.appid, target: "_blank", rel: "noopener", text: "Steam" }));
     });
     if (g.parent) {
-      links.appendChild(el("a", { class: "pill", href: "https://store.steampowered.com/app/" + g.parent, target: "_blank", rel: "noopener", text: "Demo of " + (parentGame ? parentGame.name : "App " + g.parent) }));
+      // The full game of a demo or a playtest, on Steam, with its price.
+      var parentLink = el("a", { class: "pill", href: "https://store.steampowered.com/app/" + g.parent, target: "_blank", rel: "noopener", title: parentGame ? parentGame.name : "App " + g.parent });
+      parentLink.appendChild(steamLogo());
+      parentLink.appendChild(document.createTextNode("View game"));
+      links.appendChild(parentLink);
+      addPrice(parentLink, g.parent, g, false);
     }
   }
   hero.querySelector("div").appendChild(links);

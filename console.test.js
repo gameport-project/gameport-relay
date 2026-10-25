@@ -76,6 +76,23 @@ describe("who may come in", () => {
     assert.equal((await ask("/console")).status, 200);
   });
 
+  it("tells the price of an app on Steam for the Steam button, asks again when Steam does not answer, and refuses what is not a number", async () => {
+    const realFetch = globalThis.fetch;
+    let answer = { 7: { success: true, data: { is_free: false, price_overview: { final_formatted: "9,99€", initial_formatted: "19,99€", discount_percent: 50 } } } };
+    globalThis.fetch = async (url) => (String(url).startsWith("https://store.steampowered.com/") ? new Response(JSON.stringify(answer)) : new Response(null, { status: 204 }));
+    try {
+      assert.deepEqual(await (await ask("/console/api/price?id=7")).json(), { id: 7, free: false, price: "9,99€", before: "19,99€", discount: 50 });
+      answer = { 8: { success: true, data: { is_free: true } } };
+      assert.deepEqual(await (await ask("/console/api/price?id=8")).json(), { id: 8, free: true, price: null, before: null, discount: 0 });
+      globalThis.fetch = async () => { throw new Error("down"); };
+      assert.equal((await (await ask("/console/api/price?id=9")).json()).price, null);
+      assert.equal((await ask("/console/api/price?id=x")).status, 400);
+      assert.equal((await ask("/console/api/price?id=7", { method: "POST" })).status, 405);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   it("serves the page at an address that names the set and what is open, so a refresh comes back to the same place", async () => {
     for (const path of ["/console/test", "/console/prod", "/console/prod/", "/console/test/1125240", "/console/prod/reports", "/console/prod/news", "/console/test/reasons"]) {
       const response = await ask(path);
