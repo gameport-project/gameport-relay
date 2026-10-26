@@ -218,7 +218,7 @@ describe("adding a vote", () => {
     assert.match(voter, /^[0-9a-f]{12}$/);
     assert.deepEqual(rows(), []);
     const [stored] = rows("votes_test");
-    assert.deepEqual({ ...stored, voter: undefined }, { app_id: 7, voter: undefined, verdict: "works", app: "admin", game: null, device: "pico", offline: 1, updated: new Date().toISOString().slice(0, 10), fixed: null, fixed_in: null, voted_at: `${new Date().toISOString().slice(0, 13)}:00:00Z` });
+    assert.deepEqual({ ...stored, voter: undefined }, { app_id: 7, voter: undefined, verdict: "works", app: "admin", game: null, device: "pico", offline: 1, updated: new Date().toISOString().slice(0, 10), fixed: null, fixed_in: null, voted_at: `${new Date().toISOString().slice(0, 13)}:00:00Z`, issues: null, model: null, codename: null });
     assert.deepEqual(await summary("/test/summary"), [{ appId: 7, works: 1, offlineOnly: 0, fails: 0, worksOffline: 1, devices: { pico: { works: 1, offlineOnly: 0, fails: 0, worksOffline: 1 } } }]);
     assert.deepEqual(await summary(), []);
   });
@@ -229,6 +229,15 @@ describe("adding a vote", () => {
     assert.equal((await add({})).status, 200);
     assert.deepEqual(rows().map((r) => r.app).sort(), ["0.8.1", "admin"]);
     for (const app of ["<script>", "x".repeat(33), 7, ""].slice(0, 3)) assert.equal((await add({ app })).status, 400, String(app));
+  });
+
+  it("lets the developer tick what went wrong on a vote he adds, from the fixed list, and only for an answer that says something did", async () => {
+    const add = (extra) => ask("/console/api/add", { method: "POST", body: { env: "prod", appId: 7, device: "pico", verdict: "fails", ...extra } });
+    assert.equal((await add({ issues: ["no_sound", "closes", "no_sound"] })).status, 200);
+    assert.equal((await add({ verdict: "works", issues: ["no_sound"] })).status, 200);
+    const stored = rows().map((r) => [r.verdict, r.issues]).sort();
+    assert.deepEqual(stored, [["fails", "no_sound,closes"], ["works", null]]);
+    for (const bad of ["no_sound", ["not_a_code"], [3]]) assert.equal((await add({ issues: bad })).status, 400, JSON.stringify(bad));
   });
 
   it("tells the private channel of a vote added in production, as admin, and not one added in the test set", async () => {
@@ -428,6 +437,21 @@ describe("the reports", () => {
   const ZIP = Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 250, 255]);
   const report = (table, appId, voter, day, device = "quest") =>
     db.prepare(`INSERT INTO ${table} (app_id, voter, app, device, size, data, updated) VALUES (?, ?, '0.7.4', ?, ?, ?, ?)`).run(appId, voter, device, ZIP.length, ZIP.toString("base64"), day);
+
+  it("tells the device behind a report from the vote of the same player, with its name, or the raw code when the name is not known", async () => {
+    vote(5, "aaaaaaaaaaaa");
+    vote(5, "bbbbbbbbbbbb");
+    db.prepare("UPDATE votes SET model = 'Quest 3', codename = 'eureka' WHERE voter = 'aaaaaaaaaaaa'").run();
+    db.prepare("UPDATE votes SET model = 'ZZ-NOT-A-DEVICE' WHERE voter = 'bbbbbbbbbbbb'").run();
+    report("reports", 5, "aaaaaaaaaaaa", "2026-10-08");
+    report("reports", 5, "bbbbbbbbbbbb", "2026-10-09");
+    report("reports", 5, "cccccccccccc", "2026-10-10");
+    const { reports } = await (await ask("/console/api/reports?env=prod&appId=5")).json();
+    const byDay = Object.fromEntries(reports.map((r) => [r.updated, [r.model, r.deviceName]]));
+    assert.deepEqual(byDay["2026-10-08"], ["Quest 3", "Meta Quest 3"]);
+    assert.deepEqual(byDay["2026-10-09"], ["ZZ-NOT-A-DEVICE", null]);
+    assert.deepEqual(byDay["2026-10-10"], [null, null]);
+  });
 
   it("lists the reports of a game, or the latest of every game, without the zips, newest first", async () => {
     report("reports", 5, "aaaaaaaaaaaa", "2026-10-08");

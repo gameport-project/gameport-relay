@@ -7,9 +7,11 @@
 //  - What a route reads and writes is chosen by the route, from two names written here, never from a message.
 // Without the three secrets (ACCESS_TEAM, ACCESS_AUD, ADMIN_EMAIL), nothing here answers: every route is a 404, as if it did not exist.
 
+import { deviceLabel } from "./device_names.js";
+import { ISSUE_SET } from "./issues.js";
 import { consolePage } from "./console_page.js";
 import { notifyVote } from "./notify.js";
-import { thisHour, voterHash } from "./worker.js";
+import { deviceName, thisHour, voterHash } from "./worker.js";
 
 const VERDICTS = new Set(["works", "offline_only", "fails"]);
 const DEVICES = new Set(["quest", "pico", "phone", "tablet", "other"]);
@@ -95,7 +97,7 @@ const validId = (appId) => Number.isInteger(appId) && appId >= 1 && appId <= MAX
 const validVoter = (voter) => typeof voter === "string" && /^[0-9a-f]{12}$/.test(voter);
 const validFixedIn = (text) => text === null || (typeof text === "string" && /^[0-9A-Za-z._ -]{1,32}$/.test(text));
 
-const SELECT = (table) => `SELECT app_id AS appId, voter, verdict, app, game, device, offline, updated, fixed, fixed_in AS fixedIn FROM ${table}`;
+const SELECT = (table) => `SELECT app_id AS appId, voter, verdict, app, game, device, offline, updated, fixed, fixed_in AS fixedIn, issues, model, codename FROM ${table}`;
 
 function log(action, detail) {
   // The journal of what was changed: Cloudflare keeps the logs of the relay. Nothing about the person is in it.
@@ -128,7 +130,7 @@ async function list(url, env) {
   if (!table) return json(400, { error: "bad env" });
   if (!validId(appId)) return json(400, { error: "bad appId" });
   const rows = (await env.DB.prepare(`${SELECT(table)} WHERE app_id = ? ORDER BY updated DESC, voter`).bind(appId).all()).results;
-  return json(200, { votes: rows.map((row) => ({ ...row, offline: row.offline === 1 })) });
+  return json(200, { votes: rows.map((row) => ({ ...row, offline: row.offline === 1, deviceName: deviceLabel(row.model, row.codename) })) });
 }
 
 async function add(message, env, table, environment, ctx, origin) {
@@ -142,12 +144,15 @@ async function add(message, env, table, environment, ctx, origin) {
   const offline = fields.offline === true && fields.verdict === "works" ? 1 : 0;
   // The version of GamePort the vote is told to come from, typed by the developer; "admin" when none is given.
   if (message.app !== undefined && (typeof message.app !== "string" || !/^[0-9A-Za-z._-]{1,32}$/.test(message.app))) return json(400, { error: "bad app" });
+  // What the developer says went wrong, from the same fixed list as the app's: only for an answer that says something did.
+  if (message.issues !== undefined && (!Array.isArray(message.issues) || message.issues.some((code) => typeof code !== "string" || !ISSUE_SET.has(code)))) return json(400, { error: "bad issues" });
+  const issues = fields.verdict === "works" ? [] : [...new Set(message.issues ?? [])];
   const app = message.app || "admin";
-  await env.DB.prepare(`INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated, voted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(message.appId, voter, fields.verdict, app, null, fields.device, offline, today, thisHour()).run();
+  await env.DB.prepare(`INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated, voted_at, issues, model, codename) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(message.appId, voter, fields.verdict, app, null, fields.device, offline, today, thisHour(), issues.length ? issues.join(",") : null, deviceName(message.model), deviceName(message.codename)).run();
   log("add", { env: environment, appId: message.appId, voter, verdict: fields.verdict, device: fields.device });
   // Told like a player's vote, so the channel can be tried from here; it says the version typed here, or "admin" when none, where a player's says the version of GamePort.
-  notifyVote(env, ctx, origin, { appId: message.appId, verdict: fields.verdict, device: fields.device, offline: offline === 1, app }, environment);
+  notifyVote(env, ctx, origin, { appId: message.appId, verdict: fields.verdict, device: fields.device, offline: offline === 1, app, issues }, environment);
   return json(200, { voter });
 }
 
@@ -274,12 +279,12 @@ async function listReports(url, env) {
   const votes = VOTE_OF_REPORTS[table];
   const where = appId === null ? "" : " WHERE r.app_id = ?";
   const statement = env.DB.prepare(
-    `SELECT r.id, r.app_id AS appId, r.app, r.device, r.size, r.updated, r.handled, v.verdict, v.offline FROM ${table} r LEFT JOIN ${votes} v ON v.app_id = r.app_id AND v.voter = r.voter${where} ` +
+    `SELECT r.id, r.app_id AS appId, r.app, r.device, v.model, v.codename, r.size, r.updated, r.handled, v.verdict, v.offline FROM ${table} r LEFT JOIN ${votes} v ON v.app_id = r.app_id AND v.voter = r.voter${where} ` +
     `ORDER BY r.handled IS NOT NULL, r.updated DESC, r.id DESC LIMIT ${MAX_REPORTS_LISTED}`,
   );
   const rows = (await (appId === null ? statement.all() : statement.bind(appId).all())).results;
   const [{ n }] = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE handled IS NULL`).all()).results;
-  return json(200, { unhandled: n, reports: rows.map((row) => ({ ...row, verdict: row.verdict ?? null, offline: row.verdict === null || row.verdict === undefined ? null : row.offline === 1 })) });
+  return json(200, { unhandled: n, reports: rows.map((row) => ({ ...row, deviceName: deviceLabel(row.model, row.codename), verdict: row.verdict ?? null, offline: row.verdict === null || row.verdict === undefined ? null : row.offline === 1 })) });
 }
 
 /** Marks a report as handled (the day), or as waiting again. */

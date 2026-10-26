@@ -56,11 +56,59 @@ input[type=search]:focus, .field:focus { border-color:rgba(255,255,255,.4); }
 .d-works { background:#4cc38a; } .d-offline_only { background:#f0b24a; } .d-fails { background:#ef6b6b; }
 tr td:first-child { border-left:4px solid transparent; }
 tr.v-works td:first-child { border-left-color:#4cc38a; } tr.v-offline_only td:first-child { border-left-color:#f0b24a; } tr.v-fails td:first-child { border-left-color:#ef6b6b; }
+.overview { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:10px; margin:0 0 16px; }
+.dev-card { padding:12px 14px; border-radius:12px; background:rgba(255,255,255,.04); border:1px solid var(--line); display:grid; gap:8px; align-content:start; }
+.dev-card h3 { margin:0; font-size:15px; text-transform:capitalize; }
+.counts, .issue-list { display:flex; flex-wrap:wrap; gap:6px; }
+.count { display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px; font-size:13px; background:rgba(255,255,255,.06); border:1px solid var(--line); white-space:nowrap; }
+.count .dot { margin-right:0; }
+.count.zero { opacity:.45; }
+.issue { display:inline-flex; align-items:center; gap:8px; padding:2px 10px; border-radius:999px; font-size:12.5px; white-space:nowrap; background:rgba(239,107,107,.10); border:1px solid rgba(239,107,107,.30); }
+.issue b { color:#ef6b6b; }
+.issues-label { color:var(--muted); font-size:12.5px; }
+details.incompat { margin:0 0 16px; border:1px dashed var(--line); border-radius:12px; }
+details.incompat > summary { cursor:pointer; padding:10px 14px; font-weight:600; }
+details.incompat[open] > summary { border-bottom:1px dashed var(--line); }
+details.incompat > .add { border:0; margin:0; }
+details.incompat.is-incompatible > summary { color:#ff9a9a; }
+.votes { display:flex; flex-direction:column; gap:10px; }
+.vote { display:grid; grid-template-columns:1fr auto; gap:8px 16px; align-items:center; padding:12px 16px; border-radius:12px; background:rgba(255,255,255,.04); border:1px solid var(--line); border-left:4px solid transparent; }
+.vote.v-works { border-left-color:#4cc38a; } .vote.v-offline_only { border-left-color:#f0b24a; } .vote.v-fails { border-left-color:#ef6b6b; }
+.vote-main { display:flex; flex-direction:column; gap:8px; min-width:0; }
+.vote-title { display:flex; flex-wrap:wrap; align-items:center; gap:10px; font-size:16px; }
+.ver { color:var(--muted); font-weight:500; }
+.vote .btn { height:32px; padding:0 14px; font-size:13px; }
+.vote .more > summary { padding:4px 12px; font-size:13px; }
+.vote-meta { color:var(--muted); font-size:13px; overflow-wrap:anywhere; }
+.vote-edit { grid-column:1 / -1; display:flex; flex-wrap:wrap; align-items:center; gap:14px; padding-top:10px; border-top:1px solid var(--line); }
+.vote-edit[hidden] { display:none; }
+.vote-edit label { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; }
+.game-link { color:var(--text); font-weight:600; text-decoration:underline; text-decoration-color:var(--line); text-underline-offset:3px; }
+.game-link:hover { text-decoration-color:currentColor; }
+.dev { margin-top:6px; max-width:230px; white-space:normal; line-height:1.3; }
+.dev-name { font-size:13px; font-weight:600; }
+.dev-code { font-size:12px; color:var(--muted); font-family:ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap:anywhere; }
+.mono { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px; }
+select.ans-works { color:#4cc38a; } select.ans-offline_only { color:#f0b24a; } select.ans-fails { color:#ff8a8a; }
+.multi { position:relative; }
+.multi > summary { list-style:none; cursor:pointer; height:38px; display:inline-flex; align-items:center; gap:8px; padding:0 14px; background:#0f131b; border:1px solid var(--line); border-radius:10px; min-width:220px; }
+.multi > summary::after { content:"\\25BE"; margin-left:auto; color:var(--muted); }
+.multi-menu { position:absolute; left:0; top:110%; z-index:6; min-width:290px; display:grid; gap:2px; padding:8px; background:#1b2130; border:1px solid var(--line); border-radius:10px; }
+.multi-menu label { display:flex; align-items:center; gap:10px; padding:5px 8px; border-radius:6px; cursor:pointer; }
+.multi-menu label:hover { background:rgba(255,255,255,.07); }
+.more { position:relative; }
+.more > summary { list-style:none; cursor:pointer; padding:7px 14px; border-radius:999px; border:1px solid var(--line); background:rgba(255,255,255,.07); font-weight:700; }
+.more-menu { position:absolute; right:0; top:110%; z-index:5; background:#1b2130; border:1px solid var(--line); border-radius:10px; padding:6px; }
+.add .field.wide { width:280px; }
 .chip { padding:3px 12px; border-radius:999px; background:rgba(255,255,255,.08); border:1px solid var(--line); font-size:13px; }
 .add .field { width:210px; height:38px; cursor:text; }
 .add { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:12px; border:1px dashed var(--line); border-radius:12px; margin-bottom:16px; }
 select, .field { cursor:pointer; }
-select { height:38px; padding:0 10px; background:#0f131b; border:1px solid var(--line); border-radius:10px; }
+select {
+  height:38px; padding:0 38px 0 12px; border:1px solid var(--line); border-radius:10px; appearance:none; -webkit-appearance:none;
+  background:#0f131b url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%2398a2b3' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 14px center / 12px 8px;
+}
+select.field { padding-right:38px; }
 .btn { height:38px; padding:0 16px; border-radius:999px; border:1px solid var(--line); background:rgba(255,255,255,.07); cursor:pointer; font-weight:600; }
 .btn:hover { background:rgba(255,255,255,.15); }
 .btn.fill { background:#fff; color:#111; border-color:transparent; }
@@ -235,7 +283,10 @@ function drawIncompatible() {
       call("/console/api/incompatible-remove", { env: state.env, appId: g.appid }).then(function () { toast("Taken off the list"); loadIncompatible(); }).catch(function (e) { toast(e.message, true); });
     } }));
   }
-  holder.appendChild(el("div", { class: "add stack" }, children));
+  // Folded: it is rarely used, and it pushed the votes down the page. The line says where the game stands.
+  var summary = el("summary", { text: own ? "Incompatible: " + (labels[own.reason] || own.reason) : "Compatibility: not marked as incompatible" });
+  var box = el("details", { class: "incompat" + (own ? " is-incompatible" : "") }, [summary, el("div", { class: "add stack" }, children)]);
+  holder.appendChild(box);
 }
 
 /** The table of reasons: a form to add one (or change one, its texts reach every game that names it) and the list of those that exist. */
@@ -433,22 +484,28 @@ function reportsTable(reports, withGame, refresh) {
   var body = el("tbody");
   reports.forEach(function (r) {
     var game = allGames().filter(function (g) { return g.appid === r.appId; })[0];
-    var nameCell = el("td", { text: game ? game.name : "App " + r.appId });
+    // With the games of several apps in the table, the name opens the page of the game in this console.
+    var nameText = el("a", {
+      class: "game-link", href: "/console/" + state.env + "/" + r.appId, text: game ? game.name : "App " + r.appId,
+      onclick: function (event) { event.preventDefault(); var g = game || { appid: r.appId, name: nameText.textContent, vr: false, installable: true, extra: true }; state.current = g; state.view = "game"; drawGames(); loadVotes(); },
+    });
+    var nameCell = withGame ? el("td", {}, [nameText]) : el("td", { text: game ? game.name : "App " + r.appId });
+    var setName = function (text) { if (withGame) nameText.textContent = text; else nameCell.textContent = text; };
     if (!game && withGame) {
       game = { appid: r.appId, name: "App " + r.appId, vr: false, installable: true, extra: true };
       state.extra[r.appId] = game;
       // The name comes from Steam a moment later: it is written in the cell, the table is not drawn again.
-      resolveName(game).then(function () { nameCell.textContent = game.name; });
+      resolveName(game).then(function () { setName(game.name); });
     }
     // A game whose name is still being asked: the cell is written when the answer comes.
-    if (game && game.pending) game.pending.then(function () { nameCell.textContent = game.name; });
+    if (game && game.pending) game.pending.then(function () { setName(game.name); });
     var toggle = el("button", { type: "button", class: "btn", text: r.handled ? "Reopen" : "Mark handled", onclick: function () {
       call("/console/api/report-handled", { id: r.id, handled: !r.handled })
         .then(function () { toast(r.handled ? "Back to waiting" : "Marked handled"); loadWaiting(); refresh(); }).catch(function (e) { toast(e.message, true); });
     } });
     var download = el("a", { class: "btn fill", href: "/console/api/report?env=" + state.env + "&id=" + r.id, download: "gameport-report-" + r.appId + "-" + r.id + ".zip", text: "Download" });
     var cells = (withGame ? [nameCell] : []).concat([
-      el("td", { text: r.device }), el("td", { text: r.app }), el("td", { text: r.updated }),
+      el("td", {}, [document.createTextNode(r.device), modelLine(r)]), el("td", { text: r.app }), el("td", { text: formatDay(r.updated) }),
       el("td", {}, [answerPill(r)]),
       el("td", {}, [r.handled ? el("span", { class: "muted", text: "Handled " + r.handled }) : el("span", { class: "todo", text: "To handle" })]),
       el("td", { text: size(r.size) }),
@@ -599,6 +656,32 @@ function steamLogo() {
   return svg;
 }
 
+/** The SteamDB page of an app, as a pill with a small database icon. */
+function steamdbLink(appId, title) {
+  var ns = "http://www.w3.org/2000/svg";
+  var svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  var top = document.createElementNS(ns, "ellipse");
+  top.setAttribute("cx", "12"); top.setAttribute("cy", "6"); top.setAttribute("rx", "7"); top.setAttribute("ry", "3");
+  var middle = document.createElementNS(ns, "path");
+  middle.setAttribute("d", "M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6");
+  var bottom = document.createElementNS(ns, "path");
+  bottom.setAttribute("d", "M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6");
+  svg.appendChild(top); svg.appendChild(middle); svg.appendChild(bottom);
+  var link = el("a", { class: "pill", href: "https://steamdb.info/app/" + appId + "/", target: "_blank", rel: "noopener", title: title });
+  link.appendChild(svg);
+  link.appendChild(document.createTextNode("SteamDB"));
+  return link;
+}
+
 function drawDetail() {
   var g = state.current;
   var panel = document.getElementById("detail");
@@ -617,6 +700,7 @@ function drawDetail() {
   links.appendChild(steamLink);
   // The price, as the store shows it, inside the button: free, or what it costs and, on sale, the discount. "Free" says nothing of a demo or a playtest.
   addPrice(steamLink, g.appid, g, g.type === "demo" || g.type === "playtest");
+  links.appendChild(steamdbLink(g.appid, "SteamDB: " + g.name));
   {
     demos.forEach(function (d) {
       links.appendChild(el("a", { class: "pill", href: "/console/" + state.env + "/" + d.appid, text: "Demo: " + d.name }));
@@ -629,6 +713,7 @@ function drawDetail() {
       parentLink.appendChild(document.createTextNode("View game"));
       links.appendChild(parentLink);
       addPrice(parentLink, g.parent, g, false);
+      links.appendChild(steamdbLink(g.parent, "SteamDB: the full game"));
     }
   }
   hero.querySelector("div").appendChild(links);
@@ -636,23 +721,32 @@ function drawDetail() {
   if (g.banner || g.header) hero.style.backgroundImage = "url('" + (g.banner || g.header) + "')";
   panel.appendChild(hero);
 
-  var totals = el("div", { class: "totals" });
+  // One card per kind of device: the three answers, and under them what the players ticked as going wrong (the votes that still are a problem).
+  var overview = el("div", { class: "overview" });
   var counted = state.votes.map(function (v) { return Object.assign({}, v, { verdict: v.fixed ? "works" : v.verdict }); });
   DEVICES.forEach(function (d) {
     var own = counted.filter(function (v) { return v.device === d; });
     if (!own.length) return;
-    var w = own.filter(function (v) { return v.verdict === "works"; }).length;
-    var o = own.filter(function (v) { return v.verdict === "offline_only"; }).length;
-    var f = own.filter(function (v) { return v.verdict === "fails"; }).length;
-    totals.appendChild(el("span", { class: "chip" }, [
-      el("b", { text: d + "  " }),
-      el("span", { class: "dot d-works" }), document.createTextNode(w + "  "),
-      el("span", { class: "dot d-offline_only" }), document.createTextNode(o + "  "),
-      el("span", { class: "dot d-fails" }), document.createTextNode(String(f)),
-    ]));
+    var number = function (verdict) { return own.filter(function (v) { return v.verdict === verdict; }).length; };
+    var counts = el("div", { class: "counts" });
+    [["works", "Works"], ["offline_only", "Offline only"], ["fails", "Does not work"]].forEach(function (pair) {
+      var n = number(pair[0]);
+      counts.appendChild(el("span", { class: "count" + (n ? "" : " zero") }, [el("span", { class: "dot d-" + pair[0] }), document.createTextNode(pair[1] + " " + n)]));
+    });
+    var card = el("div", { class: "dev-card" }, [el("h3", { text: d }), counts]);
+    var tally = {};
+    state.votes.filter(function (v) { return !v.fixed && v.device === d; }).forEach(function (v) {
+      (v.issues || "").split(",").filter(Boolean).forEach(function (code) { tally[code] = (tally[code] || 0) + 1; });
+    });
+    var codes = Object.keys(tally).sort(function (a, b) { return tally[b] - tally[a]; });
+    if (codes.length) {
+      card.appendChild(el("div", { class: "issues-label", text: "Problems reported" }));
+      card.appendChild(issuePills(codes.map(function (c) { return [c, tally[c]]; })));
+    }
+    overview.appendChild(card);
   });
-  if (!totals.childNodes.length) totals.appendChild(el("span", { class: "chip", text: "No vote counted" }));
-  panel.appendChild(totals);
+  if (!overview.childNodes.length) overview.appendChild(el("span", { class: "chip", text: "No vote counted" }));
+  panel.appendChild(overview);
 
   panel.appendChild(el("div", { id: "incompat" }));
   drawIncompatible();
@@ -661,16 +755,39 @@ function drawDetail() {
   var verdict = select(Object.keys(VERDICTS), "works", VERDICTS);
   var offline = el("input", { type: "checkbox", id: "add-offline" });
   var offlineLabel = el("label", { class: "muted" }, [offline, document.createTextNode(" tried offline")]);
-  var version = el("input", { type: "text", class: "field", "aria-label": "GamePort version", placeholder: "GamePort version (optional)", maxlength: "32", size: "22" });
+  var version = el("input", { type: "text", class: "field wide", "aria-label": "GamePort version", placeholder: "GamePort version, optional", maxlength: "32" });
+  // What went wrong, to tick (several) for a vote that says something did: a dropdown with a box for each.
+  var pressed = {};
+  var multiSummary = el("summary", { text: "Problems: none" });
+  var multiMenu = el("div", { class: "multi-menu" });
+  Object.keys(ISSUE_LABELS).forEach(function (code) {
+    var box = el("input", { type: "checkbox" });
+    box.addEventListener("change", function () {
+      pressed[code] = box.checked;
+      var names = Object.keys(ISSUE_LABELS).filter(function (c) { return pressed[c]; }).map(function (c) { return ISSUE_LABELS[c]; });
+      multiSummary.textContent = names.length ? "Problems: " + names.length + " (" + names.join(", ") + ")" : "Problems: none";
+    });
+    multiMenu.appendChild(el("label", {}, [box, document.createTextNode(ISSUE_LABELS[code])]));
+  });
+  var ticks = el("details", { class: "multi" }, [multiSummary, multiMenu]);
+  var showTicks = function () { ticks.hidden = verdict.value === "works"; };
+  verdict.addEventListener("change", showTicks);
+  showTicks();
   var add = el("button", { type: "button", class: "btn fill", text: "Add a vote", onclick: function () {
     var message = { appId: g.appid, device: device.value, verdict: verdict.value, offline: offline.checked };
     var typed = version.value.trim();
     if (typed && !/^[0-9A-Za-z._-]{1,32}$/.test(typed)) { toast("The version: letters, digits, dots, dashes only", true); return; }
     if (typed) message.app = typed;
+    var ticked = Object.keys(ISSUE_LABELS).filter(function (code) { return pressed[code]; });
+    if (verdict.value !== "works" && ticked.length) message.issues = ticked;
     if (!confirmWrite("Add a vote: " + g.name + ", " + device.value + ", " + VERDICTS[verdict.value] + ".")) return;
     call("/console/api/add", message).then(function () { toast("Vote added"); loadVotes(); loadCounts().then(drawGames); }).catch(function (e) { toast(e.message, true); });
   } });
-  panel.appendChild(el("div", { class: "add" }, [el("strong", { text: "New vote" }), device, verdict, version, offlineLabel, add]));
+  // Folded: it is a testing tool, and an open form invites a vote nobody meant to add.
+  panel.appendChild(el("details", { class: "incompat" }, [
+    el("summary", { text: "New vote (to try the console)" }),
+    el("div", { class: "add" }, [device, verdict, ticks, version, offlineLabel, add]),
+  ]));
 
   var reports = el("div");
   call("/console/api/reports?env=" + state.env + "&appId=" + g.appid).then(function (data) {
@@ -680,12 +797,43 @@ function drawDetail() {
   }).catch(function () {});
   var shown = state.votes.filter(function (v) { return state.device === "all" || v.device === state.device; });
   if (!shown.length) { panel.appendChild(el("p", { class: "muted", text: state.votes.length ? "No vote for this game on this device." : "No vote for this game." })); panel.appendChild(reports); return; }
-  var table = el("table", {}, [el("thead", {}, [el("tr", {}, ["Player", "Device", "Answer", "Offline", "GamePort", "Day", "State", ""].map(function (h) { return el("th", { text: h }); }))])]);
-  var body = el("tbody");
-  shown.forEach(function (v) { body.appendChild(row(v)); });
-  table.appendChild(body);
-  panel.appendChild(el("div", { class: "scroll" }, [table]));
+  var list = el("div", { class: "votes" });
+  shown.forEach(function (v) { list.appendChild(row(v)); });
+  panel.appendChild(list);
   panel.appendChild(el("div", { class: "gap" }, [reports]));
+}
+
+var ISSUE_LABELS = { no_image: "Nothing shows", flat_window: "Flat window instead of VR", closes: "Closes by itself", stuck_loading: "Stuck on loading", no_controls: "Controls missing or wrong", no_sound: "No sound", no_online: "Cannot play online", slow: "Slow or stuttering", no_passthrough: "No passthrough", visual: "Wrong colors or broken image", other: "Something else" };
+
+/** What the device calls itself under the kind of device: its name when the list knows it, with the model, or the raw model and codename. Nothing for a vote that has none. */
+function modelLine(v) {
+  if (!v.model && !v.codename) return document.createTextNode("");
+  var raw = [v.model, v.codename].filter(Boolean).join(" / ");
+  var box = el("div", { class: "dev", title: raw });
+  if (v.deviceName) box.appendChild(el("div", { class: "dev-name", text: v.deviceName }));
+  // With a name, the model is enough (the codename is in the tooltip); without one, everything the device said, one code per line.
+  (v.deviceName ? [v.model || v.codename] : [v.model, v.codename].filter(Boolean)).forEach(function (code) { box.appendChild(el("div", { class: "dev-code", text: code })); });
+  return box;
+}
+
+/** A day written YYYY-MM-DD, shown the way the browser of whoever reads the console writes dates. Anything else is shown as it is. */
+function formatDay(day) {
+  var m = /^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(day || "");
+  if (!m) return day || "";
+  var date = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+/** The problems as small red pills, each with its count when there is one. [counts] is a list of [code, count] or of codes. */
+function issuePills(items) {
+  var list = el("div", { class: "issue-list" });
+  items.forEach(function (item) {
+    var code = Array.isArray(item) ? item[0] : item;
+    var pill = el("span", { class: "issue" }, [document.createTextNode(ISSUE_LABELS[code] || code)]);
+    if (Array.isArray(item)) pill.appendChild(el("b", { text: String(item[1]) }));
+    list.appendChild(pill);
+  });
+  return list;
 }
 
 function row(v) {
@@ -702,7 +850,10 @@ function row(v) {
     call("/console/api/change", { appId: g.appid, voter: v.voter, device: device.value, verdict: verdict.value, offline: offline.checked })
       .then(function () { toast("Saved"); loadVotes(); loadCounts().then(drawGames); }).catch(function (e) { toast(e.message, true); });
   } });
-  [device, verdict, offline].forEach(function (n) { n.addEventListener("change", function () { if (dirty()) save.removeAttribute("disabled"); else save.setAttribute("disabled", "disabled"); }); });
+  // The answer shows its colour, and Save only appears once something is changed.
+  verdict.className = "ans-" + verdict.value;
+  save.hidden = true;
+  [device, verdict, offline].forEach(function (n) { n.addEventListener("change", function () { verdict.className = "ans-" + verdict.value; save.hidden = !dirty(); }); });
 
   var fixedBtn = el("button", { type: "button", class: "btn", text: v.fixed ? "Not fixed" : "Mark fixed", onclick: function () {
     if (v.fixed) {
@@ -724,13 +875,30 @@ function row(v) {
     call("/console/api/remove", { appId: g.appid, voter: v.voter }).then(function () { toast("Deleted"); loadVotes(); loadCounts().then(drawGames); }).catch(function (e) { toast(e.message, true); });
   } });
 
-  var state2 = v.fixed ? "Fixed " + v.fixed + (v.fixedIn ? " in " + v.fixedIn : "") + ", was " + VERDICTS[v.verdict] : "Counted";
-  return el("tr", { class: "v-" + answer }, [
-    el("td", { class: "muted", text: v.voter.slice(0, 6) + (v.app === "admin" ? " (admin)" : "") }),
-    el("td", {}, [device]), el("td", {}, [verdict]), el("td", {}, [offline]),
-    el("td", { text: v.app }), el("td", { text: v.updated }),
-    el("td", { class: v.fixed ? "state" : "muted", text: state2 }),
-    el("td", {}, [el("div", { class: "actions" }, [save, fixedBtn, del])]),
+  // The rare, destructive action goes behind a menu: "Mark fixed" is the one that is used.
+  var more = el("details", { class: "more" }, [el("summary", { text: "\u2026", title: "More" }), el("div", { class: "more-menu" }, [del])]);
+  var codes = (v.issues || "").split(",").filter(Boolean);
+  var state2 = v.fixed ? "Fixed " + formatDay(v.fixed) + (v.fixedIn ? " in " + v.fixedIn : "") + ", was " + VERDICTS[v.verdict] : "";
+
+  // Changing a vote is rare too: its fields stay folded until "Edit" is pressed.
+  var editor = el("div", { class: "vote-edit", hidden: "hidden" }, [
+    el("label", {}, [document.createTextNode("Device "), device]), el("label", {}, [document.createTextNode("Answer "), verdict]),
+    el("label", { class: "check" }, [offline, document.createTextNode(" Worked offline")]), save,
+  ]);
+  var edit = el("button", { type: "button", class: "btn", text: "Edit", onclick: function () { editor.hidden = !editor.hidden; } });
+
+  // The title is what the device is: its name when the list knows it, the kind of device otherwise, the model and the codename in its tooltip.
+  var title = v.deviceName || (v.model ? v.model : v.device);
+  // What the title already says is not repeated: with a name, neither the kind of device nor the model; with a raw model as the title, the kind of device only.
+  var details = [v.deviceName || title === v.device ? null : v.device, v.updated ? formatDay(v.updated) : null, v.voter + (v.app === "admin" ? " (admin)" : ""), v.offline ? "worked offline" : null, state2 || null].filter(Boolean);
+  return el("div", { class: "vote v-" + answer, title: VERDICTS[answer] }, [
+    el("div", { class: "vote-main" }, [
+      el("div", { class: "vote-title" }, [el("strong", { text: title, title: [v.model, v.codename].filter(Boolean).join(" / ") }), el("span", { class: "ver", title: "Version of GamePort that sent this vote", text: "- " + v.app })]),
+      codes.length ? issuePills(codes) : document.createTextNode(""),
+      el("div", { class: "vote-meta", text: details.join(" \u00b7 ") }),
+    ]),
+    el("div", { class: "actions" }, [fixedBtn, edit, more]),
+    editor,
   ]);
 }
 
