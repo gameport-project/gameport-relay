@@ -11,6 +11,9 @@ CREATE TABLE IF NOT EXISTS votes (
   fixed   TEXT,              -- the day the problem was solved: from then on the vote counts as "works", whatever its answer; empty while it is not fixed
   fixed_in TEXT,             -- where it was solved, free text (a version of GamePort); only for the developer
   voted_at TEXT,             -- when the relay saved the vote, UTC, rounded down to the hour (YYYY-MM-DDTHH:00:00Z): only for the developer's console; empty for the votes saved before it existed
+  issues  TEXT,              -- what the player ticked as going wrong, codes from a fixed list joined by commas (no_sound,slow); empty for "works" and for a player who ticked nothing
+  model   TEXT,              -- what the device calls itself (Build.MODEL, a short plain name): the kind of device above stays the family; empty for the votes saved before it existed
+  codename TEXT,             -- the codename of the device (Build.DEVICE), same rules
   PRIMARY KEY (app_id, voter)
 );
 
@@ -27,6 +30,9 @@ CREATE TABLE IF NOT EXISTS votes_test (
   fixed   TEXT,              -- the day the problem was solved: from then on the vote counts as "works", whatever its answer; empty while it is not fixed
   fixed_in TEXT,             -- where it was solved, free text (a version of GamePort); only for the developer
   voted_at TEXT,             -- when the relay saved the vote, UTC, rounded down to the hour (YYYY-MM-DDTHH:00:00Z): only for the developer's console; empty for the votes saved before it existed
+  issues  TEXT,              -- what the player ticked as going wrong, codes from a fixed list joined by commas; empty for "works" and for a player who ticked nothing
+  model   TEXT,              -- what the device calls itself (Build.MODEL, a short plain name): the kind of device above stays the family; empty for the votes saved before it existed
+  codename TEXT,             -- the codename of the device (Build.DEVICE), same rules
   PRIMARY KEY (app_id, voter)
 );
 

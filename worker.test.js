@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, it } from "node:test";
+import { deviceLabel } from "./device_names.js";
 import worker, { validate, voterHash } from "./worker.js";
 
 const VOTER = "0123456789abcdef0123456789abcdef";
@@ -30,7 +31,7 @@ describe("validate", () => {
     const { vote, error } = validate({ ...goodMessage({ game: "build-1.2" }), extra: "ignored", ip: "1.2.3.4" });
     assert.equal(error, undefined);
     const { v, ...expected } = goodMessage({ game: "build-1.2" });
-    assert.deepEqual(vote, { ...expected, offline: false });
+    assert.deepEqual(vote, { ...expected, offline: false, issues: [] });
   });
 
   it("refuses everything that is not exactly what the app sends", () => {
@@ -305,7 +306,7 @@ describe("the test routes", () => {
 describe("the migration of a database made before the offline column", () => {
   it("adds the column to both tables, keeps the votes, and counts them as not offline", async () => {
     const db = new DatabaseSync(":memory:");
-    const old = readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*offline INTEGER.*\n/gm, "").replaceAll(/^\s*fixed(_in)? +TEXT.*\n/gm, "").replaceAll(/^\s*voted_at +TEXT.*\n/gm, "").replaceAll("'works', 'offline_only', 'fails'", "'works', 'fails'");
+    const old = readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*offline INTEGER.*\n/gm, "").replaceAll(/^\s*fixed(_in)? +TEXT.*\n/gm, "").replaceAll(/^\s*voted_at +TEXT.*\n/gm, "").replaceAll(/^\s*issues +TEXT.*\n/gm, "").replaceAll("'works', 'offline_only', 'fails'", "'works', 'fails'");
     assert.ok(!old.includes("offline") && !old.includes("fixed") && !old.includes("voted_at"));
     db.exec(old);
     db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, updated) VALUES (1, 'aaaaaaaaaaaa', 'works', '0.7.2', NULL, 'quest', '2026-10-08')").run();
@@ -323,7 +324,7 @@ describe("the migration that allows the answer offline only", () => {
   it("rebuilds both tables, keeps every vote, and then accepts the new answer and still refuses the others", async () => {
     const db = new DatabaseSync(":memory:");
     // The database as it was after the offline column, before the third answer.
-    const schema = readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*fixed(_in)? +TEXT.*\n/gm, "").replaceAll(/^\s*voted_at +TEXT.*\n/gm, "").replaceAll("'works', 'offline_only', 'fails'", "'works', 'fails'");
+    const schema = readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*fixed(_in)? +TEXT.*\n/gm, "").replaceAll(/^\s*voted_at +TEXT.*\n/gm, "").replaceAll(/^\s*issues +TEXT.*\n/gm, "").replaceAll("'works', 'offline_only', 'fails'", "'works', 'fails'");
     assert.ok(!schema.includes("offline_only") && !schema.includes("fixed") && !schema.includes("voted_at"));
     db.exec(schema);
     db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (1, 'aaaaaaaaaaaa', 'works', '0.7.2', 'b1', 'quest', 1, '2026-10-08')").run();
@@ -578,6 +579,16 @@ describe("the messages to the developer's private channel", () => {
     assert.equal(embed.url, "https://relay.example.invalid/console/prod/5219700");
   });
 
+  it("lists what the player ticked as going wrong, in words, one a line", async () => {
+    await run(post(goodMessage({ appId: 846470, verdict: "fails", issues: ["no_controls", "no_sound"] })));
+    const field = sent[0].body.embeds[0].fields.find((f) => f.name === "Problems");
+    assert.equal(field.value, "• Controls missing or wrong\n• No sound");
+    assert.equal(field.inline, false);
+    sent.length = 0;
+    await run(post(goodMessage({ appId: 846470, verdict: "fails", voter: OTHER })));
+    assert.equal(sent[0].body.embeds[0].fields.some((f) => f.name === "Problems"), false);
+  });
+
   it("tells a real report with the player's own answer for that game, and not a report of the test set", async () => {
     await run(post(goodMessage({ appId: 846470, verdict: "offline_only" })));
     sent.length = 0;
@@ -604,3 +615,159 @@ describe("the messages to the developer's private channel", () => {
 function rowsOf(db) {
   return db.prepare("SELECT * FROM votes").all().map((row) => ({ ...row }));
 }
+
+describe("what players tick as going wrong", () => {
+  let db;
+  let env;
+  const summary = async () => (await (await worker.fetch(get(), env)).json()).games;
+  const voteWith = (voter, extra) => worker.fetch(post(goodMessage({ voter, ...extra })), env);
+
+  beforeEach(() => {
+    db = new DatabaseSync(":memory:");
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    env = { DB: d1(db), VOTER_SALT: "salt" };
+  });
+
+  it("keeps the known codes, in the order of the list, and leaves out the ones it does not know", () => {
+    assert.deepEqual(validate(goodMessage({ verdict: "fails", issues: ["slow", "no_sound", "from_the_future", "slow"] })).vote.issues, ["no_sound", "slow"]);
+    assert.deepEqual(validate(goodMessage({ verdict: "fails" })).vote.issues, []);
+  });
+
+  it("keeps none for an answer that says it worked, and refuses what is not a list of words", () => {
+    assert.deepEqual(validate(goodMessage({ verdict: "works", issues: ["no_sound"] })).vote.issues, []);
+    for (const bad of ["no_sound", { 0: "no_sound" }, [1, 2], [null], Array(33).fill("slow")]) {
+      assert.ok(validate(goodMessage({ verdict: "fails", issues: bad })).error, `should refuse ${JSON.stringify(bad)}`);
+    }
+  });
+
+  it("stores them with the vote, and the summary counts them for the game and for the kind of device", async () => {
+    assert.equal((await voteWith(VOTER, { verdict: "fails", device: "pico", issues: ["no_sound", "no_controls"] })).status, 204);
+    assert.equal((await voteWith(OTHER, { verdict: "fails", device: "pico", issues: ["no_sound"] })).status, 204);
+    assert.equal((await voteWith("1".repeat(32), { verdict: "offline_only", device: "quest", issues: ["no_online"] })).status, 204);
+    const [game] = await summary();
+    assert.deepEqual(game.issues, { no_controls: 1, no_sound: 2, no_online: 1 });
+    assert.deepEqual(game.devices.pico.issues, { no_controls: 1, no_sound: 2 });
+    assert.deepEqual(game.devices.quest.issues, { no_online: 1 });
+  });
+
+  it("says nothing when nobody ticked anything, so the summary is what it was", async () => {
+    await voteWith(VOTER, { verdict: "fails" });
+    const [game] = await summary();
+    assert.equal("issues" in game, false);
+    assert.equal("issues" in game.devices.quest, false);
+  });
+
+  it("replaces them when the same player votes again, and does not count a vote that is marked as fixed", async () => {
+    await voteWith(VOTER, { verdict: "fails", issues: ["slow"] });
+    await voteWith(VOTER, { verdict: "fails", issues: ["closes"] });
+    assert.deepEqual((await summary())[0].issues, { closes: 1 });
+    db.prepare("UPDATE votes SET fixed = '2026-10-26'").run();
+    assert.equal("issues" in (await summary())[0], false);
+  });
+
+  it("still saves the vote on a database that has not had the migration yet, without the ticks", async () => {
+    const old = new DatabaseSync(":memory:");
+    old.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*issues +TEXT.*\n/gm, ""));
+    assert.ok(!old.prepare("SELECT sql FROM sqlite_master WHERE name = 'votes'").get().sql.includes("issues"));
+    const oldEnv = { DB: d1(old), VOTER_SALT: "salt" };
+    assert.equal((await worker.fetch(post(goodMessage({ verdict: "fails", issues: ["slow"] })), oldEnv)).status, 204);
+    const body = await (await worker.fetch(get(), oldEnv)).json();
+    assert.equal(body.games[0].fails, 1);
+    assert.equal("issues" in body.games[0], false);
+    // The migration adds the column, and the ticks are kept from then on.
+    old.exec(readFileSync(new URL("./migrations/0011_issues.sql", import.meta.url), "utf8"));
+    await worker.fetch(post(goodMessage({ voter: OTHER, verdict: "fails", issues: ["slow"] })), oldEnv);
+    assert.deepEqual((await (await worker.fetch(get(), oldEnv)).json()).games[0].issues, { slow: 1 });
+  });
+});
+
+describe("the model and the codename of a device", () => {
+  it("keeps a plain model and codename, leaves out what is not a plain name, and never refuses the vote for it", () => {
+    const { vote, error } = validate(goodMessage({ model: " Quest 3 ", codename: "eureka" }));
+    assert.equal(error, undefined);
+    assert.equal(vote.model, "Quest 3");
+    assert.equal(vote.codename, "eureka");
+    for (const bad of ["", "x".repeat(41), "a<script>", "line\nbreak", 7, null, "é"]) {
+      const checked = validate(goodMessage({ model: bad, codename: bad }));
+      assert.equal(checked.error, undefined, JSON.stringify(bad));
+      assert.equal("model" in checked.vote, false);
+      assert.equal("codename" in checked.vote, false);
+    }
+    assert.equal("model" in validate(goodMessage()).vote, false);
+  });
+
+  const stripped = (...columns) => columns.reduce((sql, column) => sql.replaceAll(new RegExp(`^\\s*${column} +TEXT.*\\n`, "gm"), ""), readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+  const summaryOf = async (env) => (await (await worker.fetch(get(), env)).json()).games;
+
+  it("stores them with the vote, replaces them when the player votes again, and the summary counts the models for each kind of device", async () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    const env = { DB: d1(db), VOTER_SALT: "salt" };
+    const vote = (voter, extra) => worker.fetch(post(goodMessage({ voter, ...extra })), env);
+    await vote(VOTER, { verdict: "fails", device: "pico", model: "A8110", codename: "phoenix" });
+    await vote(OTHER, { verdict: "works", device: "pico", model: "A8110" });
+    await vote("1".repeat(32), { verdict: "works", device: "quest", model: "Quest 3", codename: "eureka" });
+    await vote("2".repeat(32), { verdict: "works", device: "phone" });
+    const [game] = await summaryOf(env);
+    assert.deepEqual(game.devices.pico.models, { A8110: { works: 1, offlineOnly: 0, fails: 1, name: "Pico 4" } });
+    assert.deepEqual(game.devices.quest.models, { "Quest 3": { works: 1, offlineOnly: 0, fails: 0, name: "Meta Quest 3" } });
+    assert.equal("models" in game.devices.phone, false);
+    // The problems ticked are counted for the model that sent them, and a model without any has none.
+    await vote("4".repeat(32), { verdict: "fails", device: "quest", model: "Quest 3S", issues: ["no_sound", "slow"] });
+    await vote("5".repeat(32), { verdict: "fails", device: "quest", model: "Quest 3S", issues: ["no_sound"] });
+    const quest = (await summaryOf(env))[0].devices.quest.models;
+    assert.deepEqual(quest["Quest 3S"].issues, { no_sound: 2, slow: 1 });
+    assert.equal("issues" in quest["Quest 3"], false);
+    // The name comes with the model when the list knows it; a model it does not know has none, and is shown as it is.
+    assert.equal(game.devices.quest.models["Quest 3"].name, "Meta Quest 3");
+    assert.equal(game.devices.pico.models.A8110.name, "Pico 4");
+    await vote("3".repeat(32), { verdict: "works", device: "phone", model: "ZZ-NOT-A-DEVICE" });
+    assert.equal("name" in (await summaryOf(env))[0].devices.phone.models["ZZ-NOT-A-DEVICE"], false);
+    await vote(VOTER, { verdict: "works", device: "pico", model: "A8210" });
+    assert.deepEqual(Object.keys((await summaryOf(env))[0].devices.pico.models).sort(), ["A8110", "A8210"]);
+    assert.equal(db.prepare("SELECT codename FROM votes WHERE model = 'Quest 3'").get().codename, "eureka");
+  });
+
+  it("still saves the vote on a database that lacks the columns, keeping the ticks when it has those", async () => {
+    const old = new DatabaseSync(":memory:");
+    old.exec(stripped("model", "codename"));
+    const env = { DB: d1(old), VOTER_SALT: "salt" };
+    assert.equal((await worker.fetch(post(goodMessage({ verdict: "fails", issues: ["slow"], model: "Quest 3" })), env)).status, 204);
+    const [game] = await summaryOf(env);
+    assert.equal(game.fails, 1);
+    assert.deepEqual(game.issues, { slow: 1 });
+    assert.equal("models" in game.devices.quest, false);
+    old.exec(readFileSync(new URL("./migrations/0013_model.sql", import.meta.url), "utf8"));
+    await worker.fetch(post(goodMessage({ voter: OTHER, verdict: "fails", model: "Quest 3" })), env);
+    assert.deepEqual((await summaryOf(env))[0].devices.quest.models, { "Quest 3": { works: 0, offlineOnly: 0, fails: 1, name: "Meta Quest 3" } });
+  });
+
+  it("is added by the migration to a database that has none, and the test seed runs twice without harm", () => {
+    const old = new DatabaseSync(":memory:");
+    old.exec(stripped("model", "codename"));
+    old.exec(readFileSync(new URL("./migrations/0013_model.sql", import.meta.url), "utf8"));
+    old.exec(readFileSync(new URL("./migrations/0012_issues_test_seed.sql", import.meta.url), "utf8"));
+    for (let i = 0; i < 2; i++) old.exec(readFileSync(new URL("./migrations/0014_model_test_seed.sql", import.meta.url), "utf8"));
+    const rows = old.prepare("SELECT voter, model, codename FROM votes_test ORDER BY voter").all().map((row) => ({ ...row }));
+    assert.deepEqual(rows.map((row) => row.model), ["Quest 3", "A8110", "SM-S918B"]);
+  });
+});
+
+describe("the name of a device", () => {
+  it("names the headsets Google's list does not have, by model then by codename", () => {
+    assert.equal(deviceLabel("Quest 3", "eureka"), "Meta Quest 3");
+    assert.equal(deviceLabel("Quest 3S", null), "Meta Quest 3S");
+    assert.equal(deviceLabel("A8110", null), "Pico 4");
+    assert.equal(deviceLabel("Something new", "panther"), "Meta Quest 3S");
+  });
+
+  it("names a phone or a tablet from Google Play's list", () => {
+    assert.equal(deviceLabel("SM-S918B", "dm3q"), "Samsung Galaxy S23 Ultra");
+    assert.equal(deviceLabel("Pixel 7", null), "Google Pixel 7");
+  });
+
+  it("answers nothing for a code it does not know, so the raw code is shown", () => {
+    assert.equal(deviceLabel("ZZ-NOT-A-DEVICE", "nope"), null);
+    assert.equal(deviceLabel(null, null), null);
+  });
+});

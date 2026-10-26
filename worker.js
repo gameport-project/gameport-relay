@@ -4,16 +4,24 @@
 // and per game for 30 days, and only the developer, with a secret token, can read them. See README.md.
 
 import { handleConsole } from "./console.js";
+import { deviceLabel } from "./device_names.js";
+import { ISSUES, ISSUE_SET } from "./issues.js";
 import { notifyReport, notifyVote } from "./notify.js";
 
 // "offline_only": the game works, but only without the network (its online or multiplayer part does not).
 const VERDICTS = new Set(["works", "offline_only", "fails"]);
 const DEVICES = new Set(["quest", "pico", "phone", "tablet", "other"]);
+export { ISSUES };
 const MAX_BODY_BYTES = 1024;
 // A report is a zip of text; a row of the database holds 2 MB at most, and the zip is stored as base64 (a third larger).
 const MAX_REPORT_BYTES = 1_000_000;
 const REPORT_DAYS = 30;
 const MAX_APP_ID = 2_000_000_000;
+
+/** What a device calls itself: a short plain name (letters, digits, space and . _ + - / ( )). Anything else is no name. */
+export function deviceName(value) {
+  return typeof value === "string" && /^[0-9A-Za-z][0-9A-Za-z ._+\-\/()]{0,39}$/.test(value.trim()) ? value.trim() : null;
+}
 
 /** Checks a message from the app. Returns {vote} with only the known fields, or {error}. Anything else is refused, never repaired. */
 export function validate(message) {
@@ -26,10 +34,18 @@ export function validate(message) {
   if (typeof message.voter !== "string" || !/^[0-9a-f]{32}$/.test(message.voter)) return { error: "bad voter" };
   if (message.game !== undefined && (typeof message.game !== "string" || !/^[0-9A-Za-z._-]{1,32}$/.test(message.game))) return { error: "bad game" };
   if (message.offline !== undefined && typeof message.offline !== "boolean") return { error: "bad offline" };
+  if (message.issues !== undefined && (!Array.isArray(message.issues) || message.issues.length > 32 || message.issues.some((code) => typeof code !== "string"))) return { error: "bad issues" };
   const vote = { appId: message.appId, verdict: message.verdict, app: message.app, device: message.device, voter: message.voter };
+  // The model and the codename of the device as it names itself (Build.MODEL, Build.DEVICE): a value that is not a plain short name is left out, never a reason to lose the vote.
+  const model = deviceName(message.model);
+  const codename = deviceName(message.codename);
+  if (model) vote.model = model;
+  if (codename) vote.codename = codename;
   if (message.game !== undefined) vote.game = message.game;
   // "Worked offline" only means something for a game that worked: a vote that says it did not work never carries it.
   vote.offline = message.offline === true && message.verdict === "works";
+  // What went wrong only means something for an answer that says something did; a code this version does not know (a newer app) is left out, not refused.
+  vote.issues = message.verdict === "works" ? [] : ISSUES.filter((code) => (message.issues ?? []).includes(code));
   return { vote };
 }
 
@@ -85,8 +101,9 @@ const ROUTES = {
 // What only the developer reads: the list of reports and each report. The route says which table (the real one or the test one).
 const ADMIN = { "/admin/reports": "reports", "/admin/test/reports": "reports_test" };
 
-const upsert = (table) => `INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated, voted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  ON CONFLICT (app_id, voter) DO UPDATE SET verdict = excluded.verdict, app = excluded.app, game = excluded.game, device = excluded.device, offline = excluded.offline, updated = excluded.updated, voted_at = excluded.voted_at, fixed = NULL, fixed_in = NULL`;
+// The columns a database may or may not have yet: level 2 has the model and the codename too (migration 0013), level 1 has the issues (0011), level 0 has neither.
+const upsert = (table, level = 2) => `INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated, voted_at${level >= 1 ? ", issues" : ""}${level >= 2 ? ", model, codename" : ""}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?${level >= 1 ? ", ?" : ""}${level >= 2 ? ", ?, ?" : ""})
+  ON CONFLICT (app_id, voter) DO UPDATE SET verdict = excluded.verdict, app = excluded.app, game = excluded.game, device = excluded.device, offline = excluded.offline, updated = excluded.updated, voted_at = excluded.voted_at${level >= 1 ? ", issues = excluded.issues" : ""}${level >= 2 ? ", model = excluded.model, codename = excluded.codename" : ""}, fixed = NULL, fixed_in = NULL`;
 
 /** The relay's own clock, UTC, rounded down to the hour: the app never sends a time, and none of a player's is used. */
 export const thisHour = (now = new Date()) => `${now.toISOString().slice(0, 13)}:00:00Z`;
@@ -116,12 +133,26 @@ async function vote(request, env, table, ctx) {
   if (error) return reply(400, { error });
   const voter = await voterHash(checked.voter, env.VOTER_SALT);
   const today = new Date().toISOString().slice(0, 10);
-  try {
-    await env.DB.prepare(upsert(table)).bind(checked.appId, voter, checked.verdict, checked.app, checked.game ?? null, checked.device, checked.offline ? 1 : 0, today, thisHour()).run();
-  } catch {
-    // What the database said stays here: the player only learns that it did not work.
-    return reply(500, { error: "not saved" });
+  const values = [checked.appId, voter, checked.verdict, checked.app, checked.game ?? null, checked.device, checked.offline ? 1 : 0, today, thisHour()];
+  const issues = checked.issues.length ? checked.issues.join(",") : null;
+  const attempts = [
+    [2, [...values, issues, checked.model ?? null, checked.codename ?? null]],
+    // A database that has not had the migration of the model yet, or that of the issues: the vote is saved without what it cannot hold, which is better than no vote.
+    [1, [...values, issues]],
+    [0, values],
+  ];
+  let saved = false;
+  for (const [level, args] of attempts) {
+    try {
+      await env.DB.prepare(upsert(table, level)).bind(...args).run();
+      saved = true;
+      break;
+    } catch {
+      // The next try holds less.
+    }
   }
+  // What the database said stays here: the player only learns that it did not work.
+  if (!saved) return reply(500, { error: "not saved" });
   // Each set tells its own channel: the real votes the real one, the test set the one for tries.
   if (table === "votes" || table === "votes_test") notifyVote(env, ctx, new URL(request.url).origin, checked, table === "votes" ? "prod" : "test");
   return reply(204);
@@ -210,6 +241,47 @@ async function summary(env, table) {
     game.worksOffline += row.worksOffline;
     game.devices[row.device] = { works: row.works, offlineOnly: row.offlineOnly, fails: row.fails, worksOffline: row.worksOffline };
     byGame.set(row.appId, game);
+  }
+  // What players ticked as going wrong, counted for the game and for each kind of device: the votes that are still a problem only (a fixed one counts as "works").
+  // A database that has not had the migration of the issues yet has none to count: the summary is the same as before.
+  let issueRows = [];
+  try {
+    // With the model when the database has it (migration 0013), to count the problems for each model too.
+    try {
+      issueRows = (await env.DB.prepare(`SELECT app_id AS appId, device, model, issues FROM ${table} WHERE fixed IS NULL AND issues IS NOT NULL AND issues <> ''`).all()).results;
+    } catch {
+      issueRows = (await env.DB.prepare(`SELECT app_id AS appId, device, issues FROM ${table} WHERE fixed IS NULL AND issues IS NOT NULL AND issues <> ''`).all()).results;
+    }
+  } catch {
+    issueRows = [];
+  }
+  for (const row of issueRows) {
+    const game = byGame.get(row.appId);
+    if (!game) continue;
+    for (const code of String(row.issues).split(",")) {
+      if (!ISSUE_SET.has(code)) continue;
+      game.issues = { ...game.issues, [code]: (game.issues?.[code] ?? 0) + 1 };
+      const device = game.devices[row.device];
+      if (device) device.issues = { ...device.issues, [code]: (device.issues?.[code] ?? 0) + 1 };
+    }
+  }
+  // The models the votes came from, for the game and each kind of device: how many said it works, partly works or fails (a fixed vote counts as "works"). Nothing to count before the migration of the models.
+  try {
+    const modelRows = (await env.DB.prepare(`SELECT app_id AS appId, device, model, SUM(verdict = 'works') AS works, SUM(verdict = 'offline_only') AS offlineOnly, SUM(verdict = 'fails') AS fails FROM (SELECT app_id, device, model, CASE WHEN fixed IS NULL THEN verdict ELSE 'works' END AS verdict FROM ${table} WHERE model IS NOT NULL AND model <> '') GROUP BY app_id, device, model ORDER BY app_id, device, model`).all()).results;
+    for (const row of modelRows) {
+      const device = byGame.get(row.appId)?.devices[row.device];
+      if (device) (device.models ??= {})[row.model] = { works: row.works, offlineOnly: row.offlineOnly, fails: row.fails, ...(deviceLabel(row.model, null) ? { name: deviceLabel(row.model, null) } : {}) };
+    }
+  } catch {
+    // No model column yet.
+  }
+  // The problems ticked for each model, next to its counts.
+  for (const row of issueRows) {
+    const model = row.model ? byGame.get(row.appId)?.devices[row.device]?.models?.[row.model] : null;
+    if (!model) continue;
+    for (const code of String(row.issues).split(",")) {
+      if (ISSUE_SET.has(code)) model.issues = { ...model.issues, [code]: (model.issues?.[code] ?? 0) + 1 };
+    }
   }
   // The day a problem was solved, and in which version when it is known: shown on the site, and counted as "works" above.
   for (const fix of fixes) {

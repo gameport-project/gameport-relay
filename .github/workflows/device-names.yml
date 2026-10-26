@@ -1,0 +1,34 @@
+name: Device names
+
+# Rebuilds the list that turns a model or a codename into a name (device_names.generated.js) from Google Play's list of supported devices, once a week,
+# and commits it when it changed. The relay is deployed by hand, so a new list reaches the console and the site at the next deployment.
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    name: Update
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: python3 scripts/update_device_names.py
+      - run: npm test
+      - name: Commit when it changed
+        run: |
+          if git diff --quiet -- device_names.generated.js; then
+            echo "No change."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add device_names.generated.js
+          git commit -m "chore: update the device names"
+          git push

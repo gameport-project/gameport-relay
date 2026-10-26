@@ -12,6 +12,11 @@ const ANSWERS = {
   offline_only: { text: "Works offline only", color: 0xf0b24a },
   fails: { text: "Does not work", color: 0xef6b6b },
 };
+// What a player ticked as going wrong, in words for the developer's channel.
+const ISSUE_WORDS = {
+  no_image: "Nothing shows", flat_window: "Flat window instead of VR", closes: "Closes by itself", stuck_loading: "Stuck on loading", no_controls: "Controls missing or wrong",
+  no_sound: "No sound", no_online: "Cannot play online", slow: "Slow or stuttering", no_passthrough: "No passthrough", visual: "Wrong colors or broken image", other: "Something else",
+};
 const DEVICES = { quest: "Quest", pico: "Pico", phone: "Phone", tablet: "Tablet", other: "Other" };
 
 /** What Steam says of an app, kept an hour: its name; only the number when Steam does not answer. */
@@ -133,6 +138,7 @@ export function notifyVote(env, ctx, origin, vote, environment = "prod") {
         field("GamePort", vote.app),
         field("App", vote.appId),
         ...(vote.game ? [field("Game build", vote.game)] : []),
+        ...(vote.issues?.length ? [field("Problems", vote.issues.map((code) => `• ${ISSUE_WORDS[code] ?? code}`).join("\n"), false)] : []),
       ],
     });
   })());
