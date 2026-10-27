@@ -761,6 +761,13 @@ describe("the name of a device", () => {
     assert.equal(deviceLabel("Something new", "panther"), "Meta Quest 3S");
   });
 
+  it("names the Pico 4 and the Pico 4 Ultra, which Google's list gives to a watch by codename", () => {
+    assert.equal(deviceLabel("A92Y0", "sparrow"), "Pico 4 Ultra");
+    assert.equal(deviceLabel(null, "sparrow"), "Pico 4 Ultra");
+    assert.equal(deviceLabel("A81E0", "PICOA8110"), "Pico 4");
+    assert.equal(deviceLabel(null, "PICOA8110"), "Pico 4");
+  });
+
   it("names a phone or a tablet from Google Play's list", () => {
     assert.equal(deviceLabel("SM-S918B", "dm3q"), "Samsung Galaxy S23 Ultra");
     assert.equal(deviceLabel("Pixel 7", null), "Google Pixel 7");

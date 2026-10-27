@@ -8,7 +8,9 @@ const HEADSET_MODELS = {
   "Quest 3S": "Meta Quest 3S",
   "Quest Pro": "Meta Quest Pro",
   A8110: "Pico 4",
+  A81E0: "Pico 4",
   A8210: "Pico 4 Pro",
+  A92Y0: "Pico 4 Ultra",
 };
 const HEADSET_CODENAMES = {
   monterey: "Meta Quest",
@@ -16,6 +18,8 @@ const HEADSET_CODENAMES = {
   eureka: "Meta Quest 3",
   panther: "Meta Quest 3S",
   seacliff: "Meta Quest Pro",
+  PICOA8110: "Pico 4",
+  sparrow: "Pico 4 Ultra",
 };
 
 /**
