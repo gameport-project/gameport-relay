@@ -41,6 +41,19 @@ input[type=search]:focus, .field:focus { border-color:rgba(255,255,255,.4); }
 .n-works { background:#4cc38a; } .n-offline_only { background:#f0b24a; } .n-fails { background:#ef6b6b; }
 .only { margin-top:10px; width:100%; }
 .device-filter { margin-top:10px; width:100%; }
+.filter-row { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); gap:8px; align-items:start; }
+.filter-row .device-filter { min-width:0; width:100%; box-sizing:border-box; }
+.sbox { position:relative; min-width:0; margin-top:10px; }
+.sbox > summary { display:block; box-sizing:border-box; width:100%; list-style:none; height:38px; line-height:36px; padding:0 38px 0 12px; border:1px solid var(--line); border-radius:10px; cursor:pointer; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; background-color:#0f131b; background-repeat:no-repeat; background-position:right 12px center; background-size:12px 8px; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%2398a2b3' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+.sbox > summary::-webkit-details-marker { display:none; }
+.sbox[open] > summary { border-color:rgba(255,255,255,.4); }
+.sbox-menu { position:absolute; left:0; top:calc(100% + 4px); z-index:6; min-width:100%; width:max-content; background:#1b2130; border:1px solid var(--line); border-radius:10px; padding:6px; }
+.sbox-menu label { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:8px; cursor:pointer; white-space:nowrap; }
+.sbox-menu label:hover { background:rgba(255,255,255,.08); }
+.sbox-menu input { accent-color:#fff; }
+.sbox-menu .sdot { width:9px; height:9px; border-radius:50%; flex:none; }
+.sdot-4cc38a { background:#4cc38a; } .sdot-f0b24a { background:#f0b24a; } .sdot-ef6b6b { background:#ef6b6b; }
+.discord-icon { color:#8c96ff; vertical-align:-2px; margin-right:6px; flex:none; }
 .only[aria-pressed="true"] { background:#fff; color:#111; border-color:transparent; }
 .muted { color:var(--muted); }
 .hero { position:relative; min-height:200px; border-radius:16px; overflow:hidden; margin:-4px 0 16px; background:#0f131b center / cover no-repeat; display:flex; align-items:flex-end; }
@@ -171,7 +184,10 @@ a.btn { display:inline-flex; align-items:center; text-decoration:none; }
   <section class="panel">
     <h2>Games</h2>
     <input type="search" id="q" placeholder="Search a game" autocomplete="off" aria-label="Search a game">
-    <select id="device" class="device-filter" aria-label="Device"><option value="all">All devices</option></select>
+    <div class="filter-row">
+      <select id="device" class="device-filter" aria-label="Device"><option value="all">All devices</option></select>
+      <details class="sbox" id="status"><summary id="status-label" aria-label="Status of the games">All statuses</summary><div class="sbox-menu" id="status-menu"></div></details>
+    </div>
     <button type="button" class="btn only" id="only" aria-pressed="false">Only games with votes</button>
     <div class="games" id="games"></div>
   </section>
@@ -183,7 +199,7 @@ a.btn { display:inline-flex; align-items:center; text-decoration:none; }
 var CATALOG = "https://raw.githubusercontent.com/gameport-project/gameport-catalog/main/v1/catalog.json";
 var DEVICES = ["quest", "pico", "phone", "tablet", "other"];
 var VERDICTS = { works: "Works", offline_only: "Offline only", fails: "Does not work" };
-var state = { env: "test", games: [], current: null, votes: [], counts: {}, onlyVoted: false, incompat: {}, reasons: [], view: "", playerId: null, extra: {}, unhandled: 0, waiting: {}, news: null, device: "all", ready: false };
+var state = { env: "test", games: [], current: null, votes: [], counts: {}, onlyVoted: false, incompat: {}, reasons: [], view: "", playerId: null, statuses: {}, extra: {}, unhandled: 0, waiting: {}, news: null, device: "all", ready: false };
 
 function el(tag, attrs, children) {
   var node = document.createElement(tag);
@@ -444,6 +460,12 @@ function drawGames() {
   box.textContent = "";
   allGames().filter(function (g) {
     if ((state.onlyVoted || state.device !== "all") && !deviceCounts(state.counts[g.appid])) return false;
+    // The status a game shows (the colour of its badge, for the chosen device): only the games whose status is ticked, none that has no vote.
+    var ticked = Object.keys(state.statuses).filter(function (k) { return state.statuses[k]; });
+    if (ticked.length) {
+      var own = deviceCounts(state.counts[g.appid]);
+      if (!own || ticked.indexOf(majority(own)) === -1) return false;
+    }
     return !q || g.name.toLowerCase().indexOf(q) !== -1 || String(g.appid) === q;
   }).slice(0, 200).forEach(function (g) {
     var n = deviceCounts(state.counts[g.appid]);
@@ -525,14 +547,35 @@ function reportsTable(reports, withGame, refresh, hidePlayer) {
 
 var reportsAsked = 0;
 
+/** The small Discord mark, drawn from attributes only (the page's policy allows no style attribute). It stands before a name that is a Discord name. */
+var DISCORD_PATH = "M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z";
+function discordIcon(size) {
+  var ns = "http://www.w3.org/2000/svg";
+  var svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", String(size || 14));
+  svg.setAttribute("height", String(size || 14));
+  svg.setAttribute("class", "discord-icon");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Discord name");
+  var title = document.createElementNS(ns, "title");
+  title.textContent = "Discord name";
+  svg.appendChild(title);
+  var path = document.createElementNS(ns, "path");
+  path.setAttribute("fill", "currentColor");
+  path.setAttribute("d", DISCORD_PATH);
+  svg.appendChild(path);
+  return svg;
+}
+
 /** A player as a link to everything they sent: the name given to them (a Discord name, say) when there is one, with the short hash beside it. */
 function playerLink(hash, label, stacked) {
   var link = el("a", { class: "player-link", href: "/console/" + state.env + "/player/" + hash, title: "Everything this player sent",
     onclick: function (event) { event.preventDefault(); showPlayer(hash); } });
   link.appendChild(document.createTextNode(label || hash));
   if (!label) return link;
-  // In a table the hash goes under the name, so the column stays narrow; in a line of text it follows the name.
-  return stacked ? el("div", { class: "player-cell" }, [link, el("small", { class: "muted", text: hash })]) : el("span", {}, [link, el("small", { class: "muted", text: " " + hash })]);
+  // In a table the hash goes under the name, so the column stays narrow; in a line of text it follows the name. The mark says the name is a Discord name.
+  return stacked ? el("div", { class: "player-cell" }, [el("span", {}, [discordIcon(), link]), el("small", { class: "muted", text: hash })]) : el("span", {}, [discordIcon(), link, el("small", { class: "muted", text: " " + hash })]);
 }
 
 /** The name of a game as a link that opens it in this console. A game that is not in the catalog is asked from Steam, and the link is written when the name comes. */
@@ -560,10 +603,17 @@ function showPlayer(hash) {
   drawGames();
   var panel = document.getElementById("detail");
   panel.textContent = "";
-  panel.appendChild(el("h2", { text: "Player " + hash }));
+  var heading = el("h2", { text: "Player " + hash });
+  panel.appendChild(heading);
   call("/console/api/player?env=" + state.env + "&voter=" + hash).then(function (data) {
     // Only the last request draws: a second click, or a switch of environment, must not add a second page.
     if (mine !== playerAsked || state.view !== "player") return;
+    if (data.label) {
+      heading.textContent = "";
+      heading.appendChild(discordIcon(18));
+      heading.appendChild(document.createTextNode(data.label + " "));
+      heading.appendChild(el("small", { class: "muted", text: hash }));
+    }
     var name = el("input", { type: "text", class: "field", maxlength: "40", value: data.label || "", placeholder: "Name of this player (a Discord name, for example)", "aria-label": "Name of this player" });
     var save = el("button", { type: "button", class: "btn fill", text: "Save the name", onclick: function () {
       var typed = name.value.trim();
@@ -984,6 +1034,26 @@ function row(v) {
   ]);
 }
 
+/** The menu of the status filter: one box per status, any number ticked; the closed box says what is ticked. */
+var STATUS_CHOICES = [["works", "Works", "#4cc38a"], ["offline_only", "Works offline only", "#f0b24a"], ["fails", "Does not work", "#ef6b6b"]];
+function drawStatusMenu() {
+  var menu = document.getElementById("status-menu");
+  STATUS_CHOICES.forEach(function (choice) {
+    var box = el("input", { type: "checkbox", value: choice[0], "aria-label": choice[1] });
+    box.addEventListener("change", function () {
+      state.statuses[choice[0]] = box.checked;
+      var names = STATUS_CHOICES.filter(function (c) { return state.statuses[c[0]]; }).map(function (c) { return c[1]; });
+      document.getElementById("status-label").textContent = names.length ? names.join(", ") : "All statuses";
+      drawGames();
+    });
+    // The colour comes from a class: the page's policy allows no style attribute.
+    var dot = el("span", { class: "sdot sdot-" + choice[2].slice(1) });
+    menu.appendChild(el("label", {}, [box, dot, document.createTextNode(choice[1])]));
+  });
+}
+drawStatusMenu();
+document.addEventListener("click", function (event) { var box = document.getElementById("status"); if (box.open && !box.contains(event.target)) box.open = false; });
+document.addEventListener("keydown", function (event) { if (event.key === "Escape") document.getElementById("status").open = false; });
 document.getElementById("b-test").addEventListener("click", function () { setEnv("test"); });
 document.getElementById("b-prod").addEventListener("click", function () { setEnv("prod"); });
 document.getElementById("q").addEventListener("input", drawGames);
