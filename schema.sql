@@ -105,3 +105,17 @@ CREATE TABLE IF NOT EXISTS console_seen (
   name TEXT PRIMARY KEY,
   at   TEXT NOT NULL
 );
+
+-- The name the developer gives to a player (a Discord name, say) to recognise them in the console: one per hashed player, for the real set and for the test one. It is typed
+-- in the console, stays in this database, and is never sent anywhere; the app and the site know nothing of it.
+CREATE TABLE IF NOT EXISTS player_labels (
+  voter   TEXT PRIMARY KEY,  -- the same short salted hash as in votes
+  label   TEXT NOT NULL,
+  updated TEXT NOT NULL      -- the day, YYYY-MM-DD
+);
+
+CREATE TABLE IF NOT EXISTS player_labels_test (
+  voter   TEXT PRIMARY KEY,
+  label   TEXT NOT NULL,
+  updated TEXT NOT NULL
+);

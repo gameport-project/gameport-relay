@@ -24,6 +24,9 @@ const REPORT_TABLES = { prod: "reports", test: "reports_test" };
 // The votes each set of reports goes with: a report and the vote of the same player for the same game share the app and the hashed player.
 const VOTE_OF_REPORTS = { reports: "votes", reports_test: "votes_test" };
 const MAX_REPORTS_LISTED = 200;
+// The names the developer gives to players (a Discord name, say), for the same two sets: the player stays a short hash everywhere else.
+const LABEL_TABLES = { prod: "player_labels", test: "player_labels_test" };
+const MAX_LABEL = 40;
 // The games confirmed as incompatible, for the same two sets.
 const INCOMPATIBLE_TABLES = { prod: { games: "incompatible", reasons: "incompatible_reasons" }, test: { games: "incompatible_test", reasons: "incompatible_reasons_test" } };
 const HEADER = "x-gameport-console";
@@ -95,6 +98,12 @@ export function checkVote(message, { partial }) {
 
 const validId = (appId) => Number.isInteger(appId) && appId >= 1 && appId <= MAX_APP_ID;
 const validVoter = (voter) => typeof voter === "string" && /^[0-9a-f]{12}$/.test(voter);
+/** A name for a player: one line of text, no markup and no control character. Returns the trimmed text, or null. */
+const checkLabel = (text) => {
+  if (typeof text !== "string") return null;
+  const label = text.trim();
+  return label.length >= 1 && label.length <= MAX_LABEL && !/[\u0000-\u001f\u007f<>]/.test(label) ? label : null;
+};
 const validFixedIn = (text) => text === null || (typeof text === "string" && /^[0-9A-Za-z._ -]{1,32}$/.test(text));
 
 const SELECT = (table) => `SELECT app_id AS appId, voter, verdict, app, game, device, offline, updated, fixed, fixed_in AS fixedIn, issues, model, codename FROM ${table}`;
@@ -129,7 +138,11 @@ async function list(url, env) {
   const appId = Number(url.searchParams.get("appId"));
   if (!table) return json(400, { error: "bad env" });
   if (!validId(appId)) return json(400, { error: "bad appId" });
-  const rows = (await env.DB.prepare(`${SELECT(table)} WHERE app_id = ? ORDER BY updated DESC, voter`).bind(appId).all()).results;
+  const labels = LABEL_TABLES[url.searchParams.get("env")];
+  const rows = (await env.DB.prepare(
+    `SELECT v.app_id AS appId, v.voter, v.verdict, v.app, v.game, v.device, v.offline, v.updated, v.fixed, v.fixed_in AS fixedIn, v.issues, v.model, v.codename, l.label FROM ${table} v ` +
+    `LEFT JOIN ${labels} l ON l.voter = v.voter WHERE v.app_id = ? ORDER BY v.updated DESC, v.voter`,
+  ).bind(appId).all()).results;
   return json(200, { votes: rows.map((row) => ({ ...row, offline: row.offline === 1, deviceName: deviceLabel(row.model, row.codename) })) });
 }
 
@@ -276,15 +289,54 @@ async function listReports(url, env) {
   const given = url.searchParams.get("appId");
   const appId = given === null ? null : Number(given);
   if (appId !== null && !validId(appId)) return json(400, { error: "bad appId" });
+  const rows = await reportRows(url.searchParams.get("env"), appId === null ? "" : " WHERE r.app_id = ?", appId === null ? [] : [appId], env);
+  const [{ n }] = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE handled IS NULL`).all()).results;
+  return json(200, { unhandled: n, reports: rows });
+}
+
+/** The reports that match [where], newest first, the ones not handled before the others: each with the answer and the device of the same player for the same game, the player and the name given to them. */
+async function reportRows(environment, where, binds, env) {
+  const table = REPORT_TABLES[environment];
   const votes = VOTE_OF_REPORTS[table];
-  const where = appId === null ? "" : " WHERE r.app_id = ?";
+  const labels = LABEL_TABLES[environment];
   const statement = env.DB.prepare(
-    `SELECT r.id, r.app_id AS appId, r.app, r.device, v.model, v.codename, r.size, r.updated, r.handled, v.verdict, v.offline FROM ${table} r LEFT JOIN ${votes} v ON v.app_id = r.app_id AND v.voter = r.voter${where} ` +
+    `SELECT r.id, r.app_id AS appId, r.voter, l.label, r.app, r.device, v.model, v.codename, r.size, r.updated, r.handled, v.verdict, v.offline FROM ${table} r ` +
+    `LEFT JOIN ${votes} v ON v.app_id = r.app_id AND v.voter = r.voter LEFT JOIN ${labels} l ON l.voter = r.voter${where} ` +
     `ORDER BY r.handled IS NOT NULL, r.updated DESC, r.id DESC LIMIT ${MAX_REPORTS_LISTED}`,
   );
-  const rows = (await (appId === null ? statement.all() : statement.bind(appId).all())).results;
-  const [{ n }] = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE handled IS NULL`).all()).results;
-  return json(200, { unhandled: n, reports: rows.map((row) => ({ ...row, deviceName: deviceLabel(row.model, row.codename), verdict: row.verdict ?? null, offline: row.verdict === null || row.verdict === undefined ? null : row.offline === 1 })) });
+  const rows = (await (binds.length ? statement.bind(...binds) : statement).all()).results;
+  return rows.map((row) => ({ ...row, label: row.label ?? null, deviceName: deviceLabel(row.model, row.codename), verdict: row.verdict ?? null, offline: row.verdict === null || row.verdict === undefined ? null : row.offline === 1 }));
+}
+
+/** Everything one player sent: their votes on every game, their reports, and the name given to them. */
+async function player(url, env) {
+  const environment = url.searchParams.get("env");
+  const table = TABLES[environment];
+  if (!table) return json(400, { error: "bad env" });
+  const voter = url.searchParams.get("voter");
+  if (!validVoter(voter)) return json(400, { error: "bad voter" });
+  const votes = (await env.DB.prepare(`${SELECT(table)} WHERE voter = ? ORDER BY updated DESC, app_id`).bind(voter).all()).results;
+  const reports = await reportRows(environment, " WHERE r.voter = ?", [voter], env);
+  const [named] = (await env.DB.prepare(`SELECT label FROM ${LABEL_TABLES[environment]} WHERE voter = ?`).bind(voter).all()).results;
+  return json(200, { voter, label: named?.label ?? null, votes: votes.map((row) => ({ ...row, offline: row.offline === 1, deviceName: deviceLabel(row.model, row.codename) })), reports });
+}
+
+/** Gives a player a name (or takes it away with an empty one). The name stays in the developer's database and in the console: it is not written in the journal. */
+async function setLabel(message, env, _table, environment) {
+  const labels = LABEL_TABLES[environment];
+  if (!validVoter(message.voter)) return json(400, { error: "bad voter" });
+  if (message.label === null || message.label === undefined || (typeof message.label === "string" && message.label.trim() === "")) {
+    await env.DB.prepare(`DELETE FROM ${labels} WHERE voter = ?`).bind(message.voter).run();
+    log("player-label-clear", { env: environment, voter: message.voter });
+    return json(200, { ok: true, label: null });
+  }
+  const label = checkLabel(message.label);
+  if (!label) return json(400, { error: "bad label" });
+  const today = new Date().toISOString().slice(0, 10);
+  await env.DB.prepare(`INSERT INTO ${labels} (voter, label, updated) VALUES (?, ?, ?) ON CONFLICT (voter) DO UPDATE SET label = excluded.label, updated = excluded.updated`)
+    .bind(message.voter, label, today).run();
+  log("player-label-set", { env: environment, voter: message.voter });
+  return json(200, { ok: true, label });
 }
 
 /** Marks a report as handled (the day), or as waiting again. */
@@ -435,10 +487,10 @@ async function seen(message, env, _table, environment) {
   return json(200, { ok: true });
 }
 
-const WRITES = { "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove, "/console/api/report-handled": handleReport, "/console/api/incompatible-set": setIncompatible, "/console/api/reason-set": setReason, "/console/api/reason-remove": removeReason, "/console/api/incompatible-remove": removeIncompatible, "/console/api/seen": seen };
+const WRITES = { "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove, "/console/api/report-handled": handleReport, "/console/api/incompatible-set": setIncompatible, "/console/api/reason-set": setReason, "/console/api/reason-remove": removeReason, "/console/api/incompatible-remove": removeIncompatible, "/console/api/seen": seen, "/console/api/player-label": setLabel };
 
 /** The page answers at /console and at an address that names the set and what is open: /console/prod, /console/test/1125240, /console/prod/reports, /console/prod/news, /console/test/reasons. */
-const PAGE_PATH = /^\/console\/?$|^\/console\/(test|prod)(\/(\d{1,10}|reports|news|reasons))?\/?$/;
+const PAGE_PATH = /^\/console\/?$|^\/console\/(test|prod)(\/(\d{1,10}|reports|news|reasons|player\/[0-9a-f]{12}))?\/?$/;
 
 /** The routes of the console. Returns a response, or null when the path is not one of the console's. */
 export async function handleConsole(request, env, ctx) {
@@ -466,6 +518,7 @@ export async function handleConsole(request, env, ctx) {
     if (url.pathname === "/console/api/news") return request.method === "GET" ? await news(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/incompatible") return request.method === "GET" ? await listIncompatible(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/reports") return request.method === "GET" ? await listReports(url, env) : json(405, { error: "use GET" });
+    if (url.pathname === "/console/api/player") return request.method === "GET" ? await player(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/report") return request.method === "GET" ? await downloadReport(url, env) : json(405, { error: "use GET" });
     const write = WRITES[url.pathname];
     if (!write) return notFound();

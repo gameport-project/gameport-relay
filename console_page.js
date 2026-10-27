@@ -85,6 +85,11 @@ details.incompat.is-incompatible > summary { color:#ff9a9a; }
 .vote-edit label { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; }
 .game-link { color:var(--text); font-weight:600; text-decoration:underline; text-decoration-color:var(--line); text-underline-offset:3px; }
 .game-link:hover { text-decoration-color:currentColor; }
+.player-link { color:var(--text); font-weight:600; text-decoration:underline; text-decoration-color:var(--line); text-underline-offset:3px; overflow-wrap:anywhere; }
+.player-link:hover { text-decoration-color:currentColor; }
+.player-cell small { display:block; font-size:12px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+.player-edit { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:6px 0 18px; }
+.player-edit .field { width:min(340px, 100%); cursor:text; }
 .dev { margin-top:6px; max-width:230px; white-space:normal; line-height:1.3; }
 .dev-name { font-size:13px; font-weight:600; }
 .dev-code { font-size:12px; color:var(--muted); font-family:ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap:anywhere; }
@@ -178,7 +183,7 @@ a.btn { display:inline-flex; align-items:center; text-decoration:none; }
 var CATALOG = "https://raw.githubusercontent.com/gameport-project/gameport-catalog/main/v1/catalog.json";
 var DEVICES = ["quest", "pico", "phone", "tablet", "other"];
 var VERDICTS = { works: "Works", offline_only: "Offline only", fails: "Does not work" };
-var state = { env: "test", games: [], current: null, votes: [], counts: {}, onlyVoted: false, incompat: {}, reasons: [], view: "", extra: {}, unhandled: 0, waiting: {}, news: null, device: "all", ready: false };
+var state = { env: "test", games: [], current: null, votes: [], counts: {}, onlyVoted: false, incompat: {}, reasons: [], view: "", playerId: null, extra: {}, unhandled: 0, waiting: {}, news: null, device: "all", ready: false };
 
 function el(tag, attrs, children) {
   var node = document.createElement(tag);
@@ -229,6 +234,7 @@ function setEnv(env) {
     drawGames();
     if (state.view === "reports") showLatestReports();
     else if (state.view === "news") showNews();
+    else if (state.view === "player" && state.playerId) showPlayer(state.playerId);
     else if (state.current) loadVotes();
   });
 }
@@ -422,7 +428,7 @@ function majority(c) {
 /** The address says the set and what is open (/console/prod/1125240, /console/test/news): a refresh, a copied link or a bookmark comes back to the same place. */
 function syncUrl() {
   if (!state.ready) return;
-  var tail = state.view === "game" && state.current ? "/" + state.current.appid : state.view === "reports" || state.view === "news" || state.view === "reasons" ? "/" + state.view : "";
+  var tail = state.view === "player" && state.playerId ? "/player/" + state.playerId : state.view === "game" && state.current ? "/" + state.current.appid : state.view === "reports" || state.view === "news" || state.view === "reasons" ? "/" + state.view : "";
   var path = "/console/" + state.env + tail + (state.onlyVoted ? "?voted" : "");
   if (location.pathname + location.search !== path) history.pushState(null, "", path);
 }
@@ -478,8 +484,8 @@ function answerPill(r) {
 }
 
 /** The reports as a table. Each has what the player answered, whether it waits or was handled, a link that saves the zip and a button to mark it. A game name is shown when the reports are of several games. */
-function reportsTable(reports, withGame, refresh) {
-  var head = (withGame ? ["Game"] : []).concat(["Device", "GamePort", "Day", "Answer", "State", "Size", ""]);
+function reportsTable(reports, withGame, refresh, hidePlayer) {
+  var head = (withGame ? ["Game"] : []).concat(hidePlayer ? [] : ["Player"], ["Device", "GamePort", "Day", "Answer", "State", "Size", ""]);
   var table = el("table", {}, [el("thead", {}, [el("tr", {}, head.map(function (h) { return el("th", { text: h }); }))])]);
   var body = el("tbody");
   reports.forEach(function (r) {
@@ -504,7 +510,7 @@ function reportsTable(reports, withGame, refresh) {
         .then(function () { toast(r.handled ? "Back to waiting" : "Marked handled"); loadWaiting(); refresh(); }).catch(function (e) { toast(e.message, true); });
     } });
     var download = el("a", { class: "btn fill", href: "/console/api/report?env=" + state.env + "&id=" + r.id, download: "gameport-report-" + r.appId + "-" + r.id + ".zip", text: "Download" });
-    var cells = (withGame ? [nameCell] : []).concat([
+    var cells = (withGame ? [nameCell] : []).concat(hidePlayer ? [] : [el("td", {}, [playerLink(r.voter, r.label, true)])], [
       el("td", {}, [document.createTextNode(r.device), modelLine(r)]), el("td", { text: r.app }), el("td", { text: formatDay(r.updated) }),
       el("td", {}, [answerPill(r)]),
       el("td", {}, [r.handled ? el("span", { class: "muted", text: "Handled " + r.handled }) : el("span", { class: "todo", text: "To handle" })]),
@@ -518,6 +524,79 @@ function reportsTable(reports, withGame, refresh) {
 }
 
 var reportsAsked = 0;
+
+/** A player as a link to everything they sent: the name given to them (a Discord name, say) when there is one, with the short hash beside it. */
+function playerLink(hash, label, stacked) {
+  var link = el("a", { class: "player-link", href: "/console/" + state.env + "/player/" + hash, title: "Everything this player sent",
+    onclick: function (event) { event.preventDefault(); showPlayer(hash); } });
+  link.appendChild(document.createTextNode(label || hash));
+  if (!label) return link;
+  // In a table the hash goes under the name, so the column stays narrow; in a line of text it follows the name.
+  return stacked ? el("div", { class: "player-cell" }, [link, el("small", { class: "muted", text: hash })]) : el("span", {}, [link, el("small", { class: "muted", text: " " + hash })]);
+}
+
+/** The name of a game as a link that opens it in this console. A game that is not in the catalog is asked from Steam, and the link is written when the name comes. */
+function gameLink(appId) {
+  var game = allGames().filter(function (g) { return g.appid === appId; })[0];
+  if (!game) {
+    game = { appid: appId, name: "App " + appId, vr: false, installable: true, extra: true };
+    state.extra[appId] = game;
+    resolveName(game);
+  }
+  var link = el("a", { class: "game-link", href: "/console/" + state.env + "/" + appId, text: game.name,
+    onclick: function (event) { event.preventDefault(); state.current = game; state.view = "game"; drawGames(); loadVotes(); } });
+  if (game.pending) game.pending.then(function () { link.textContent = game.name; });
+  return link;
+}
+
+var playerAsked = 0;
+
+/** Everything one player sent: the name given to them, their answers on every game, and their reports. */
+function showPlayer(hash) {
+  state.current = null;
+  state.view = "player";
+  state.playerId = hash;
+  var mine = ++playerAsked;
+  drawGames();
+  var panel = document.getElementById("detail");
+  panel.textContent = "";
+  panel.appendChild(el("h2", { text: "Player " + hash }));
+  call("/console/api/player?env=" + state.env + "&voter=" + hash).then(function (data) {
+    // Only the last request draws: a second click, or a switch of environment, must not add a second page.
+    if (mine !== playerAsked || state.view !== "player") return;
+    var name = el("input", { type: "text", class: "field", maxlength: "40", value: data.label || "", placeholder: "Name of this player (a Discord name, for example)", "aria-label": "Name of this player" });
+    var save = el("button", { type: "button", class: "btn fill", text: "Save the name", onclick: function () {
+      var typed = name.value.trim();
+      call("/console/api/player-label", { voter: hash, label: typed }).then(function () { toast(typed ? "Name saved" : "Name removed"); loadWaiting(); showPlayer(hash); }).catch(function (e) { toast(e.message, true); });
+    } });
+    panel.appendChild(el("div", { class: "player-edit" }, [name, save]));
+    panel.appendChild(el("p", { class: "muted", text: "The name stays in the relay's database and in this console. The app and the site never see it." }));
+
+    panel.appendChild(el("h2", { text: "Answers (" + data.votes.length + ")" }));
+    if (!data.votes.length) panel.appendChild(el("p", { class: "muted", text: "No answer from this player." }));
+    else {
+      var table = el("table", {}, [el("thead", {}, [el("tr", {}, ["Game", "Answer", "Device", "GamePort", "Day", "Problems"].map(function (h) { return el("th", { text: h }); }))])]);
+      var body = el("tbody");
+      data.votes.forEach(function (v) {
+        var codes = (v.issues || "").split(",").filter(Boolean);
+        var shown = v.fixed ? { verdict: "works", offline: false } : v;
+        body.appendChild(el("tr", {}, [
+          el("td", {}, [gameLink(v.appId)]),
+          el("td", {}, [answerPill(shown), v.fixed ? el("small", { class: "muted", text: " fixed " + formatDay(v.fixed) + ", was " + ANSWERS[v.verdict] }) : null]),
+          el("td", {}, [document.createTextNode(v.device), modelLine(v)]),
+          el("td", { text: v.app }),
+          el("td", { text: formatDay(v.updated) }),
+          el("td", {}, [codes.length ? issuePills(codes) : document.createTextNode("")]),
+        ]));
+      });
+      table.appendChild(body);
+      panel.appendChild(el("div", { class: "scroll" }, [table]));
+    }
+
+    panel.appendChild(el("h2", { text: "Reports (" + data.reports.length + ")" }));
+    panel.appendChild(data.reports.length ? reportsTable(data.reports, true, function () { showPlayer(hash); }, true) : el("p", { class: "muted", text: "No report from this player." }));
+  }).catch(function (e) { toast(e.message, true); });
+}
 
 /** The day (UTC) a game became installable on Android, as the catalog tells it: only the games that have one can be news. */
 function newGames(since) {
@@ -890,12 +969,15 @@ function row(v) {
   // The title is what the device is: its name when the list knows it, the kind of device otherwise, the model and the codename in its tooltip.
   var title = v.deviceName || (v.model ? v.model : v.device);
   // What the title already says is not repeated: with a name, neither the kind of device nor the model; with a raw model as the title, the kind of device only.
-  var details = [v.deviceName || title === v.device ? null : v.device, v.updated ? formatDay(v.updated) : null, v.voter + (v.app === "admin" ? " (admin)" : ""), v.offline ? "worked offline" : null, state2 || null].filter(Boolean);
+  var details = [v.deviceName || title === v.device ? null : v.device, v.updated ? formatDay(v.updated) : null, v.voter, v.offline ? "worked offline" : null, state2 || null].filter(Boolean);
   return el("div", { class: "vote v-" + answer, title: VERDICTS[answer] }, [
     el("div", { class: "vote-main" }, [
       el("div", { class: "vote-title" }, [el("strong", { text: title, title: [v.model, v.codename].filter(Boolean).join(" / ") }), el("span", { class: "ver", title: "Version of GamePort that sent this vote", text: "- " + v.app })]),
       codes.length ? issuePills(codes) : document.createTextNode(""),
-      el("div", { class: "vote-meta", text: details.join(" \u00b7 ") }),
+      el("div", { class: "vote-meta" }, details.map(function (piece, i) {
+        var part = piece === v.voter ? el("span", {}, [playerLink(v.voter, v.label), document.createTextNode(v.app === "admin" ? " (admin)" : "")]) : document.createTextNode(piece);
+        return i ? el("span", {}, [document.createTextNode(" \u00b7 "), part]) : part;
+      })),
     ]),
     el("div", { class: "actions" }, [fixedBtn, edit, more]),
     editor,
@@ -923,7 +1005,7 @@ fetch(CATALOG).then(function (r) { return r.json(); }).then(function (data) {
   state.games = data.apps.slice().sort(function (a, b) { return a.name.localeCompare(b.name); });
   // The address says what to open: /console/prod/1125240 a game in production, /console/test/reports or /news or /reasons a page, ?voted only the games with votes.
   // The old addresses (#1125240/prod, #reports, #voted) still open the same thing, and are rewritten.
-  var route = location.pathname.match(/^\\/console\\/(test|prod)(?:\\/(\\d+|reports|news|reasons))?\\/?$/);
+  var route = location.pathname.match(/^\\/console\\/(test|prod)(?:\\/(\\d+|reports|news|reasons|player\\/[0-9a-f]{12}))?\\/?$/);
   var env = route ? route[1] : "test";
   var section = route ? route[2] : null;
   var old = location.hash.match(/^#(?:(\\d+)|(reports))(\\/prod)?$/);
@@ -933,6 +1015,7 @@ fetch(CATALOG).then(function (r) { return r.json(); }).then(function (data) {
   if (section === "reports") showLatestReports();
   else if (section === "news") showNews();
   else if (section === "reasons") showReasons();
+  else if (section && section.indexOf("player/") === 0) showPlayer(section.slice(7));
   else if (section) {
     var id = Number(section);
     var found = state.games.filter(function (g) { return g.appid === id; })[0];

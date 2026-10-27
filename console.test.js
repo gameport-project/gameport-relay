@@ -495,6 +495,103 @@ describe("the reports", () => {
   });
 });
 
+describe("the players", () => {
+  const ZIP = Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 250, 255]);
+  const report = (table, appId, voter, day) =>
+    db.prepare(`INSERT INTO ${table} (app_id, voter, app, device, size, data, updated) VALUES (?, ?, '0.9.1', 'pico', ?, ?, ?)`).run(appId, voter, ZIP.length, ZIP.toString("base64"), day);
+  const label = (voter, text, env = "prod") => ask("/console/api/player-label", { method: "POST", body: { env, voter, label: text } });
+
+  it("gives everything one player sent: their answers on every game, their reports and the device behind each", async () => {
+    vote(5, "aaaaaaaaaaaa", { device: "pico" });
+    vote(6, "aaaaaaaaaaaa", { verdict: "works", device: "pico" });
+    vote(5, "bbbbbbbbbbbb");
+    db.prepare("UPDATE votes SET model = 'A92Y0', codename = 'sparrow' WHERE voter = 'aaaaaaaaaaaa'").run();
+    report("reports", 5, "aaaaaaaaaaaa", "2026-10-09");
+    report("reports", 5, "bbbbbbbbbbbb", "2026-10-09");
+    const answer = await (await ask("/console/api/player?env=prod&voter=aaaaaaaaaaaa")).json();
+    assert.equal(answer.voter, "aaaaaaaaaaaa");
+    assert.equal(answer.label, null);
+    assert.deepEqual(answer.votes.map((v) => [v.appId, v.verdict, v.deviceName]).sort(), [[5, "fails", "Pico 4 Ultra"], [6, "works", "Pico 4 Ultra"]]);
+    assert.deepEqual(answer.reports.map((r) => [r.appId, r.voter, r.deviceName]), [[5, "aaaaaaaaaaaa", "Pico 4 Ultra"]]);
+    assert.ok(answer.reports.every((r) => !("data" in r)));
+  });
+
+  it("keeps the real set and the test set apart, and refuses a player that is not a hash or a set that is not one", async () => {
+    vote(5, "aaaaaaaaaaaa");
+    const test = await (await ask("/console/api/player?env=test&voter=aaaaaaaaaaaa")).json();
+    assert.deepEqual([test.votes, test.reports], [[], []]);
+    for (const query of ["env=prod&voter=nothex000000", "env=prod&voter=aaaaaaaaaaa", "env=prod", "voter=aaaaaaaaaaaa", "env=votes&voter=aaaaaaaaaaaa"]) {
+      assert.equal((await ask(`/console/api/player?${query}`)).status, 400, query);
+    }
+    assert.equal((await ask("/console/api/player?env=prod&voter=aaaaaaaaaaaa", { method: "POST" })).status, 405);
+  });
+
+  it("names a player, and the name follows them in the votes, the reports and their page, but only in the set it was given in", async () => {
+    vote(5, "aaaaaaaaaaaa");
+    report("reports", 5, "aaaaaaaaaaaa", "2026-10-09");
+    assert.equal((await label("aaaaaaaaaaaa", "  Some Tester [Team]  ")).status, 200);
+    const votes = (await (await ask("/console/api/votes?env=prod&appId=5")).json()).votes;
+    assert.equal(votes[0].label, "Some Tester [Team]");
+    const reports = (await (await ask("/console/api/reports?env=prod")).json()).reports;
+    assert.deepEqual([reports[0].voter, reports[0].label], ["aaaaaaaaaaaa", "Some Tester [Team]"]);
+    assert.equal((await (await ask("/console/api/player?env=prod&voter=aaaaaaaaaaaa")).json()).label, "Some Tester [Team]");
+    assert.equal((await (await ask("/console/api/player?env=test&voter=aaaaaaaaaaaa")).json()).label, null);
+    assert.deepEqual(db.prepare("SELECT voter, label FROM player_labels_test").all(), []);
+  });
+
+  it("changes a name, and removes it when it is sent empty or null", async () => {
+    await label("aaaaaaaaaaaa", "First");
+    await label("aaaaaaaaaaaa", "Second");
+    assert.deepEqual(db.prepare("SELECT label FROM player_labels").all().map((r) => r.label), ["Second"]);
+    assert.equal((await label("aaaaaaaaaaaa", "   ")).status, 200);
+    assert.deepEqual(db.prepare("SELECT label FROM player_labels").all(), []);
+    await label("aaaaaaaaaaaa", "Third");
+    assert.equal((await label("aaaaaaaaaaaa", null)).status, 200);
+    assert.deepEqual(db.prepare("SELECT label FROM player_labels").all(), []);
+  });
+
+  it("refuses a name that is too long, has markup or a line break, a player that is not a hash, and a name sent from another site", async () => {
+    for (const bad of ["x".repeat(41), "<b>bold</b>", "two\nlines", 12, ["a"]]) {
+      assert.equal((await label("aaaaaaaaaaaa", bad)).status, 400, JSON.stringify(bad));
+    }
+    assert.equal((await label("not-a-hash", "Name")).status, 400);
+    assert.equal((await ask("/console/api/player-label", { method: "POST", body: { env: "prod", voter: "aaaaaaaaaaaa", label: "Name" }, page: false, headers: { origin: "https://evil.example", "content-type": "application/json", "x-gameport-console": "1" } })).status, 403);
+    assert.deepEqual(db.prepare("SELECT * FROM player_labels").all(), []);
+  });
+
+  it("keeps the name out of the journal", async () => {
+    const lines = [];
+    const original = console.log;
+    console.log = (line) => lines.push(String(line));
+    try {
+      await label("aaaaaaaaaaaa", "Secret Name");
+    } finally {
+      console.log = original;
+    }
+    assert.ok(lines.some((line) => line.includes("player-label-set") && line.includes("aaaaaaaaaaaa")));
+    assert.ok(lines.every((line) => !line.includes("Secret Name")));
+  });
+
+  it("is added by its migration to a database that lacks the tables, and the migration runs twice without harm", () => {
+    const old = new DatabaseSync(":memory:");
+    old.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replace(/CREATE TABLE IF NOT EXISTS player_labels(_test)?[^;]*;/g, ""));
+    assert.equal(old.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name LIKE 'player_labels%'").get().n, 0);
+    for (let i = 0; i < 2; i++) old.exec(readFileSync(new URL("./migrations/0015_player_labels.sql", import.meta.url), "utf8"));
+    assert.equal(old.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name LIKE 'player_labels%'").get().n, 2);
+    old.prepare("INSERT INTO player_labels (voter, label, updated) VALUES ('aaaaaaaaaaaa', 'x', '2026-10-27')").run();
+    old.exec(readFileSync(new URL("./migrations/0015_player_labels.sql", import.meta.url), "utf8"));
+    assert.equal(old.prepare("SELECT label FROM player_labels").get().label, "x");
+  });
+
+  it("serves the page at the address of a player, and only for a hash", async () => {
+    assert.equal((await ask("/console/prod/player/aaaaaaaaaaaa")).status, 200);
+    assert.equal((await ask("/console/test/player/0123456789ab")).status, 200);
+    assert.equal((await ask("/console/prod/player/AAAAAAAAAAAA")).status, 404);
+    assert.equal((await ask("/console/prod/player/aaaaaaaaaaa")).status, 404);
+    assert.equal((await ask("/console/prod/player/")).status, 404);
+  });
+});
+
 describe("the name of an app that is not in the catalog", () => {
   const real = globalThis.fetch;
   let asked;
