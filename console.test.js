@@ -219,7 +219,7 @@ describe("adding a vote", () => {
     assert.match(voter, /^[0-9a-f]{12}$/);
     assert.deepEqual(rows(), []);
     const [stored] = rows("votes_test");
-    assert.deepEqual({ ...stored, voter: undefined }, { app_id: 7, voter: undefined, verdict: "works", app: "admin", game: null, device: "pico", offline: 1, updated: new Date().toISOString().slice(0, 10), fixed: null, fixed_in: null, voted_at: `${new Date().toISOString().slice(0, 13)}:00:00Z`, issues: null, model: null, codename: null });
+    assert.deepEqual({ ...stored, voter: undefined }, { app_id: 7, voter: undefined, verdict: "works", app: "admin", game: null, device: "pico", offline: 1, updated: new Date().toISOString().slice(0, 10), fixed: null, fixed_in: null, voted_at: `${new Date().toISOString().slice(0, 13)}:00:00Z`, issues: null, model: null, codename: null, report_state: null });
     assert.deepEqual(await summary("/test/summary"), [{ appId: 7, works: 1, offlineOnly: 0, fails: 0, worksOffline: 1, devices: { pico: { works: 1, offlineOnly: 0, fails: 0, worksOffline: 1 } } }]);
     assert.deepEqual(await summary(), []);
   });
@@ -510,6 +510,18 @@ describe("the reports", () => {
     report("reports", 5, "aaaaaaaaaaaa", "2026-10-08");
     assert.equal((await ask("/console/api/reports?env=prod", { jwt: null })).status, 404);
     assert.equal((await ask("/console/api/report?env=prod&id=1", { jwt: null })).status, 404);
+  });
+});
+
+describe("the state of the report in the console", () => {
+  it("gives the state of the report with each vote, and on the page of the player", async () => {
+    vote(5, "aaaaaaaaaaaa");
+    db.prepare("UPDATE votes SET report_state = 'waiting' WHERE voter = 'aaaaaaaaaaaa'").run();
+    vote(5, "bbbbbbbbbbbb");
+    const votes = (await (await ask("/console/api/votes?env=prod&appId=5")).json()).votes;
+    assert.deepEqual(Object.fromEntries(votes.map((v) => [v.voter, v.reportState])), { aaaaaaaaaaaa: "waiting", bbbbbbbbbbbb: null });
+    const player = await (await ask("/console/api/player?env=prod&voter=aaaaaaaaaaaa")).json();
+    assert.equal(player.votes[0].reportState, "waiting");
   });
 });
 

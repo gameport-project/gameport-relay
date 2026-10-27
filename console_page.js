@@ -53,6 +53,7 @@ input[type=search]:focus, .field:focus { border-color:rgba(255,255,255,.4); }
 .sbox-menu input { accent-color:#fff; }
 .sbox-menu .sdot { width:9px; height:9px; border-radius:50%; flex:none; }
 .sdot-4cc38a { background:#4cc38a; } .sdot-f0b24a { background:#f0b24a; } .sdot-ef6b6b { background:#ef6b6b; }
+.report-state { margin-top:6px; }
 .discord-icon { color:#8c96ff; vertical-align:-2px; margin-right:6px; flex:none; }
 .only[aria-pressed="true"] { background:#fff; color:#111; border-color:transparent; }
 .muted { color:var(--muted); }
@@ -498,6 +499,13 @@ function size(bytes) { return bytes < 1024 ? bytes + " B" : Math.round(bytes / 1
 
 var ANSWERS = { works: "Works", offline_only: "Works offline only", fails: "Does not work" };
 
+/** What became of the report the app sent just before an answer, in the colour of what it means: nothing for an answer that has no state (it worked, or an older app). */
+var REPORT_STATES = { sent: ["Report sent", "v-works", "The relay has the report"], waiting: ["Report waiting", "v-offline_only", "Kept on the device: no network, or the relay was busy"], refused: ["Report refused", "v-fails", "The relay would not take the report"], none: ["No report", "v-none", "None was made: the game is not installed, or the report is too large"] };
+function reportPill(state) {
+  var info = REPORT_STATES[state];
+  return info ? el("span", { class: "pill " + info[1], text: info[0], title: info[2] }) : document.createTextNode("");
+}
+
 /** What the player answered for the game the report is about: the colour says which answer, "no vote" when there is none. */
 function answerPill(r) {
   if (!r.verdict) return el("span", { class: "pill v-none", text: "No vote" });
@@ -625,7 +633,7 @@ function showPlayer(hash) {
     panel.appendChild(el("h2", { text: "Answers (" + data.votes.length + ")" }));
     if (!data.votes.length) panel.appendChild(el("p", { class: "muted", text: "No answer from this player." }));
     else {
-      var table = el("table", {}, [el("thead", {}, [el("tr", {}, ["Game", "Answer", "Device", "GamePort", "Day", "Problems"].map(function (h) { return el("th", { text: h }); }))])]);
+      var table = el("table", {}, [el("thead", {}, [el("tr", {}, ["Game", "Answer", "Device", "GamePort", "Day", "Problems", "Report"].map(function (h) { return el("th", { text: h }); }))])]);
       var body = el("tbody");
       data.votes.forEach(function (v) {
         var codes = (v.issues || "").split(",").filter(Boolean);
@@ -637,6 +645,7 @@ function showPlayer(hash) {
           el("td", { text: v.app }),
           el("td", { text: formatDay(v.updated) }),
           el("td", {}, [codes.length ? issuePills(codes) : document.createTextNode("")]),
+          el("td", {}, [reportPill(v.reportState)]),
         ]));
       });
       table.appendChild(body);
@@ -1024,6 +1033,7 @@ function row(v) {
     el("div", { class: "vote-main" }, [
       el("div", { class: "vote-title" }, [el("strong", { text: title, title: [v.model, v.codename].filter(Boolean).join(" / ") }), el("span", { class: "ver", title: "Version of GamePort that sent this vote", text: "- " + v.app })]),
       codes.length ? issuePills(codes) : document.createTextNode(""),
+      v.reportState ? el("div", { class: "report-state" }, [reportPill(v.reportState)]) : document.createTextNode(""),
       el("div", { class: "vote-meta" }, details.map(function (piece, i) {
         var part = piece === v.voter ? el("span", {}, [playerLink(v.voter, v.label), document.createTextNode(v.app === "admin" ? " (admin)" : "")]) : document.createTextNode(piece);
         return i ? el("span", {}, [document.createTextNode(" \u00b7 "), part]) : part;

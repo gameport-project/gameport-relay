@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS votes (
   issues  TEXT,              -- what the player ticked as going wrong, codes from a fixed list joined by commas (no_sound,slow); empty for "works" and for a player who ticked nothing
   model   TEXT,              -- what the device calls itself (Build.MODEL, a short plain name): the kind of device above stays the family; empty for the votes saved before it existed
   codename TEXT,             -- the codename of the device (Build.DEVICE), same rules
+  report_state TEXT,         -- what became of the report the app sent just before the answer: sent, waiting, refused or none; empty for the answers saved before it existed, and for "it worked"
   PRIMARY KEY (app_id, voter)
 );
 
@@ -33,6 +34,7 @@ CREATE TABLE IF NOT EXISTS votes_test (
   issues  TEXT,              -- what the player ticked as going wrong, codes from a fixed list joined by commas; empty for "works" and for a player who ticked nothing
   model   TEXT,              -- what the device calls itself (Build.MODEL, a short plain name): the kind of device above stays the family; empty for the votes saved before it existed
   codename TEXT,             -- the codename of the device (Build.DEVICE), same rules
+  report_state TEXT,         -- what became of the report the app sent just before the answer: sent, waiting, refused or none; empty for the answers saved before it existed, and for "it worked"
   PRIMARY KEY (app_id, voter)
 );
 

@@ -607,6 +607,16 @@ describe("the messages to the developer's private channel", () => {
     assert.ok(!JSON.stringify(sent).includes(VOTER));
   });
 
+  it("tells what became of the report with the answer, in words, and nothing when the answer has no state", async () => {
+    await run(post(goodMessage({ appId: 846470, verdict: "fails", device: "pico", report: "none" })));
+    assert.match(sent[0].body.embeds[0].fields.find((f) => f.name === "Report").value, /^None \(the game is not installed, or the report is too large\)$/);
+    sent.length = 0;
+    await run(post(goodMessage({ appId: 846470, verdict: "fails", device: "pico", report: "sent" })));
+    assert.equal(sent[0].body.embeds[0].fields.find((f) => f.name === "Report").value, "Sent");
+    sent.length = 0;
+    await run(post(goodMessage({ appId: 846470, verdict: "fails", device: "pico" })));
+    assert.equal(sent[0].body.embeds[0].fields.find((f) => f.name === "Report"), undefined);
+  });
 
   it("shows the name the developer gave the player, with the code, in a vote and in a report", async () => {
     await run(post(goodMessage({ appId: 846470, verdict: "fails", device: "pico" })));
@@ -867,6 +877,63 @@ describe("the model and the codename of a device", () => {
     for (let i = 0; i < 2; i++) old.exec(readFileSync(new URL("./migrations/0014_model_test_seed.sql", import.meta.url), "utf8"));
     const rows = old.prepare("SELECT voter, model, codename FROM votes_test ORDER BY voter").all().map((row) => ({ ...row }));
     assert.deepEqual(rows.map((row) => row.model), ["Quest 3", "A8110", "SM-S918B"]);
+  });
+});
+
+describe("the state of the report that goes with an answer", () => {
+  const fresh = () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    return { db, env: { DB: d1(db), VOTER_SALT: "salt" } };
+  };
+  const stateOf = (db, table = "votes") => db.prepare(`SELECT report_state FROM ${table}`).all().map((row) => row.report_state);
+
+  it("keeps a state the app knows, for an answer that says something went wrong", () => {
+    for (const report of ["sent", "waiting", "refused", "none"]) {
+      assert.equal(validate(goodMessage({ verdict: "fails", report })).vote.report, report);
+      assert.equal(validate(goodMessage({ verdict: "offline_only", report })).vote.report, report);
+    }
+  });
+
+  it("leaves out a state it does not know or one that goes with \"it worked\", and never refuses the vote for it", () => {
+    for (const bad of ["lost", "", 3, null, ["sent"], "SENT"]) {
+      const checked = validate(goodMessage({ verdict: "fails", report: bad }));
+      assert.equal(checked.error, undefined, JSON.stringify(bad));
+      assert.equal("report" in checked.vote, false);
+    }
+    assert.equal("report" in validate(goodMessage({ verdict: "works", report: "sent" })).vote, false);
+    assert.equal("report" in validate(goodMessage({ verdict: "fails" })).vote, false);
+  });
+
+  it("stores it with the vote, replaces it when the same answer comes again with another state, and keeps the test set apart", async () => {
+    const { db, env } = fresh();
+    assert.equal((await worker.fetch(post(goodMessage({ verdict: "fails", report: "waiting" })), env)).status, 204);
+    assert.deepEqual(stateOf(db), ["waiting"]);
+    assert.equal((await worker.fetch(post(goodMessage({ verdict: "fails", report: "sent" })), env)).status, 204);
+    assert.deepEqual(stateOf(db), ["sent"]);
+    // An older app sends none: the answer is saved, with no state.
+    assert.equal((await worker.fetch(post(goodMessage({ verdict: "fails" })), env)).status, 204);
+    assert.deepEqual(stateOf(db), [null]);
+    assert.equal((await worker.fetch(post(goodMessage({ verdict: "fails", report: "none" }), "/test/vote"), env)).status, 204);
+    assert.deepEqual(stateOf(db, "votes_test"), ["none"]);
+    assert.deepEqual(stateOf(db), [null]);
+  });
+
+  it("still saves the vote on a database that has not had the migration, without the state", async () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*report_state +TEXT.*\n/gm, ""));
+    const env = { DB: d1(db), VOTER_SALT: "salt" };
+    assert.equal((await worker.fetch(post(goodMessage({ verdict: "fails", report: "sent", model: "Quest 3" })), env)).status, 204);
+    const row = db.prepare("SELECT verdict, model FROM votes").get();
+    assert.deepEqual({ ...row }, { verdict: "fails", model: "Quest 3" });
+  });
+
+  it("is added by its migration to a database that lacks the columns", () => {
+    const old = new DatabaseSync(":memory:");
+    old.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*report_state +TEXT.*\n/gm, ""));
+    old.exec(readFileSync(new URL("./migrations/0017_report_state.sql", import.meta.url), "utf8"));
+    old.prepare("UPDATE votes SET report_state = 'sent'").run();
+    assert.doesNotThrow(() => old.prepare("SELECT report_state FROM votes_test").all());
   });
 });
 

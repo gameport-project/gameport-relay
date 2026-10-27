@@ -17,6 +17,8 @@ const ISSUE_WORDS = {
   no_image: "Nothing shows", flat_window: "Flat window instead of VR", closes: "Closes by itself", stuck_loading: "Stuck on loading", no_controls: "Controls missing or wrong",
   no_sound: "No sound", no_online: "Cannot play online", slow: "Slow or stuttering", no_passthrough: "No passthrough", visual: "Wrong colors or broken image", other: "Something else",
 };
+// What became of the report that goes with an answer, in words for the developer's channel (the app sends the report first, then the answer with this).
+const REPORT_WORDS = { sent: "Sent", waiting: "Waiting on the device (no network, or the relay was busy)", refused: "Refused by the relay", none: "None (the game is not installed, or the report is too large)" };
 const DEVICES = { quest: "Quest", pico: "Pico", phone: "Phone", tablet: "Tablet", other: "Other" };
 
 /** What Steam says of an app, kept an hour: its name; only the number when Steam does not answer. */
@@ -160,6 +162,7 @@ export function notifyVote(env, ctx, origin, vote, environment = "prod", player 
         field("GamePort", vote.app),
         field("App", vote.appId),
         ...who.fields,
+        ...(vote.report ? [field("Report", REPORT_WORDS[vote.report] ?? vote.report)] : []),
         ...(vote.game ? [field("Game build", vote.game)] : []),
         ...(vote.issues?.length ? [field("Problems", vote.issues.map((code) => `• ${ISSUE_WORDS[code] ?? code}`).join("\n"), false)] : []),
       ],

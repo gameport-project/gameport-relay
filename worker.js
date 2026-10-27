@@ -10,6 +10,9 @@ import { notifyReport, notifyVote } from "./notify.js";
 
 // "offline_only": the game works, but only without the network (its online or multiplayer part does not).
 const VERDICTS = new Set(["works", "offline_only", "fails"]);
+// What became of the report that goes with an answer, as the app tells it: `sent` (the relay has it), `waiting` (kept on the device, no network or the relay busy), `refused` (the relay will
+// not take it) and `none` (there is none: the game is not installed, or the report is too large).
+export const REPORT_STATES = new Set(["sent", "waiting", "refused", "none"]);
 const DEVICES = new Set(["quest", "pico", "phone", "tablet", "other"]);
 export { ISSUES };
 const MAX_BODY_BYTES = 1024;
@@ -50,6 +53,8 @@ export function validate(message) {
   vote.offline = message.offline === true && message.verdict === "works";
   // What went wrong only means something for an answer that says something did; a code this version does not know (a newer app) is left out, not refused.
   vote.issues = message.verdict === "works" ? [] : ISSUES.filter((code) => (message.issues ?? []).includes(code));
+  // What became of the technical report the app sent just before this answer: only for an answer that says something went wrong, and a state this version does not know is left out.
+  if (message.verdict !== "works" && REPORT_STATES.has(message.report)) vote.report = message.report;
   return { vote };
 }
 
@@ -122,9 +127,9 @@ const ROUTES = {
 // What only the developer reads: the list of reports and each report. The route says which table (the real one or the test one).
 const ADMIN = { "/admin/reports": "reports", "/admin/test/reports": "reports_test" };
 
-// The columns a database may or may not have yet: level 2 has the model and the codename too (migration 0013), level 1 has the issues (0011), level 0 has neither.
-const upsert = (table, level = 2) => `INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated, voted_at${level >= 1 ? ", issues" : ""}${level >= 2 ? ", model, codename" : ""}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?${level >= 1 ? ", ?" : ""}${level >= 2 ? ", ?, ?" : ""})
-  ON CONFLICT (app_id, voter) DO UPDATE SET verdict = excluded.verdict, app = excluded.app, game = excluded.game, device = excluded.device, offline = excluded.offline, updated = excluded.updated, voted_at = excluded.voted_at${level >= 1 ? ", issues = excluded.issues" : ""}${level >= 2 ? ", model = excluded.model, codename = excluded.codename" : ""}, fixed = NULL, fixed_in = NULL`;
+// The columns a database may or may not have yet: level 3 has the state of the report too (migration 0017), level 2 the model and the codename (0013), level 1 the issues (0011), level 0 none.
+const upsert = (table, level = 3) => `INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated, voted_at${level >= 1 ? ", issues" : ""}${level >= 2 ? ", model, codename" : ""}${level >= 3 ? ", report_state" : ""}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?${level >= 1 ? ", ?" : ""}${level >= 2 ? ", ?, ?" : ""}${level >= 3 ? ", ?" : ""})
+  ON CONFLICT (app_id, voter) DO UPDATE SET verdict = excluded.verdict, app = excluded.app, game = excluded.game, device = excluded.device, offline = excluded.offline, updated = excluded.updated, voted_at = excluded.voted_at${level >= 1 ? ", issues = excluded.issues" : ""}${level >= 2 ? ", model = excluded.model, codename = excluded.codename" : ""}${level >= 3 ? ", report_state = excluded.report_state" : ""}, fixed = NULL, fixed_in = NULL`;
 
 /** The relay's own clock, UTC, rounded down to the hour: the app never sends a time, and none of a player's is used. */
 export const thisHour = (now = new Date()) => `${now.toISOString().slice(0, 13)}:00:00Z`;
@@ -157,6 +162,7 @@ async function vote(request, env, table, ctx) {
   const values = [checked.appId, voter, checked.verdict, checked.app, checked.game ?? null, checked.device, checked.offline ? 1 : 0, today, thisHour()];
   const issues = checked.issues.length ? checked.issues.join(",") : null;
   const attempts = [
+    [3, [...values, issues, checked.model ?? null, checked.codename ?? null, checked.report ?? null]],
     [2, [...values, issues, checked.model ?? null, checked.codename ?? null]],
     // A database that has not had the migration of the model yet, or that of the issues: the vote is saved without what it cannot hold, which is better than no vote.
     [1, [...values, issues]],

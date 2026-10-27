@@ -106,7 +106,7 @@ const checkLabel = (text) => {
 };
 const validFixedIn = (text) => text === null || (typeof text === "string" && /^[0-9A-Za-z._ -]{1,32}$/.test(text));
 
-const SELECT = (table) => `SELECT app_id AS appId, voter, verdict, app, game, device, offline, updated, fixed, fixed_in AS fixedIn, issues, model, codename FROM ${table}`;
+const SELECT = (table) => `SELECT app_id AS appId, voter, verdict, app, game, device, offline, updated, fixed, fixed_in AS fixedIn, issues, model, codename, report_state AS reportState FROM ${table}`;
 
 function log(action, detail) {
   // The journal of what was changed: Cloudflare keeps the logs of the relay. Nothing about the person is in it.
@@ -140,7 +140,7 @@ async function list(url, env) {
   if (!validId(appId)) return json(400, { error: "bad appId" });
   const labels = LABEL_TABLES[url.searchParams.get("env")];
   const rows = (await env.DB.prepare(
-    `SELECT v.app_id AS appId, v.voter, v.verdict, v.app, v.game, v.device, v.offline, v.updated, v.fixed, v.fixed_in AS fixedIn, v.issues, v.model, v.codename, l.label FROM ${table} v ` +
+    `SELECT v.app_id AS appId, v.voter, v.verdict, v.app, v.game, v.device, v.offline, v.updated, v.fixed, v.fixed_in AS fixedIn, v.issues, v.model, v.codename, v.report_state AS reportState, l.label FROM ${table} v ` +
     `LEFT JOIN ${labels} l ON l.voter = v.voter WHERE v.app_id = ? ORDER BY v.updated DESC, v.voter`,
   ).bind(appId).all()).results;
   return json(200, { votes: rows.map((row) => ({ ...row, offline: row.offline === 1, deviceName: deviceLabel(row.model, row.codename) })) });
