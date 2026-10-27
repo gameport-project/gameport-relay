@@ -593,16 +593,52 @@ describe("the messages to the developer's private channel", () => {
   });
   afterEach(() => { globalThis.fetch = realFetch; });
 
-  it("tells a real vote with the game, the answer and the device, and nothing about the player", async () => {
+  it("tells a real vote with the game, the answer, the device and the player's short code, never the id the app keeps", async () => {
     assert.equal((await run(post(goodMessage({ appId: 846470, verdict: "fails", device: "pico" })))).status, 204);
     assert.equal(sent.length, 1);
     assert.equal(sent[0].url, HOOK);
     const embed = sent[0].body.embeds[0];
+    const hash = rowsOf(db)[0].voter;
     assert.match(embed.title, /A Game/);
     assert.deepEqual(embed.fields.slice(0, 2).map((f) => f.value), ["Does not work", "Pico"]);
+    assert.equal(embed.fields.find((f) => f.name === "Player").value, hash);
+    assert.ok(embed.description.includes(`[Player](https://relay.example.invalid/console/prod/player/${hash})`), embed.description);
     assert.deepEqual(sent[0].body.allowed_mentions, { parse: [] });
     assert.ok(!JSON.stringify(sent).includes(VOTER));
-    assert.ok(!JSON.stringify(sent).includes(rowsOf(db)[0].voter));
+  });
+
+
+  it("shows the name the developer gave the player, with the code, in a vote and in a report", async () => {
+    await run(post(goodMessage({ appId: 846470, verdict: "fails", device: "pico" })));
+    const hash = rowsOf(db)[0].voter;
+    db.prepare("INSERT INTO player_labels (voter, label, updated) VALUES (?, 'Some Tester [Team]', '2026-10-27')").run(hash);
+    sent.length = 0;
+    await run(post(goodMessage({ appId: 846470, verdict: "fails", device: "pico" })));
+    assert.equal(sent[0].body.embeds[0].fields.find((f) => f.name === "Player").value, `Some Tester [Team] (${hash})`);
+    sent.length = 0;
+    await run(report());
+    const embed = sent[0].body.embeds[0];
+    assert.match(embed.title, /New report/);
+    assert.equal(embed.fields.find((f) => f.name === "Player").value, `Some Tester [Team] (${hash})`);
+    assert.ok(embed.description.includes(`/console/prod/player/${hash}`));
+    assert.ok(!JSON.stringify(sent).includes(VOTER));
+  });
+
+  it("names a player of the test set from the test names only, and still tells the code when the table of names is not there yet", async () => {
+    const TEST_HOOK = "https://discord.com/api/webhooks/987654321/test-token_XYZ";
+    env.DISCORD_TEST_WEBHOOK = TEST_HOOK;
+    await run(post(goodMessage({ appId: 846470 }), "/test/vote"));
+    const hash = db.prepare("SELECT voter FROM votes_test").get().voter;
+    db.prepare("INSERT INTO player_labels (voter, label, updated) VALUES (?, 'Real set name', '2026-10-27')").run(hash);
+    sent.length = 0;
+    await run(post(goodMessage({ appId: 846470 }), "/test/vote"));
+    assert.equal(sent[0].body.embeds[0].fields.find((f) => f.name === "Player").value, hash);
+    assert.ok(sent[0].body.embeds[0].description.includes(`/console/test/player/${hash}`));
+    db.exec("DROP TABLE player_labels; DROP TABLE player_labels_test;");
+    sent.length = 0;
+    await run(post(goodMessage({ appId: 846470, verdict: "fails" })));
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].body.embeds[0].fields.find((f) => f.name === "Player").value, rowsOf(db)[0].voter);
   });
 
   it("does not tell a vote of the test set, and the player's answer is the same without a channel", async () => {

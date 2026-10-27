@@ -175,7 +175,7 @@ async function vote(request, env, table, ctx) {
   // What the database said stays here: the player only learns that it did not work.
   if (!saved) return reply(500, { error: "not saved" });
   // Each set tells its own channel: the real votes the real one, the test set the one for tries.
-  if (table === "votes" || table === "votes_test") notifyVote(env, ctx, new URL(request.url).origin, checked, table === "votes" ? "prod" : "test");
+  if (table === "votes" || table === "votes_test") notifyVote(env, ctx, new URL(request.url).origin, checked, table === "votes" ? "prod" : "test", voter);
   return reply(204);
 }
 
@@ -241,7 +241,7 @@ async function report(request, env, table, ctx) {
     } catch {
       // The report is told without the player's answer, and without its link.
     }
-    notifyReport(env, ctx, new URL(request.url).origin, { id, appId: meta.appId, app: meta.app, device: meta.device, size: bytes.length }, answer, environment);
+    notifyReport(env, ctx, new URL(request.url).origin, { id, appId: meta.appId, app: meta.app, device: meta.device, size: bytes.length }, answer, environment, voter);
   }
   return reply(204);
 }

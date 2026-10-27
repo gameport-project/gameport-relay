@@ -1,7 +1,7 @@
 // A message to the developer's private Discord channel when a vote or a report arrives: the one for production (secret DISCORD_ADMIN_WEBHOOK) and, apart, the one for the
 // test set (secret DISCORD_TEST_WEBHOOK), so the tries of a test build never mix with the real ones. It is for one person: the address of a webhook is a secret of the
-// relay, never written in a file or a log. Nothing about the player is sent (no id, no hash), and a failure here changes nothing: the vote or the
-// report is already saved, and the player gets the same answer.
+// relay, never written in a file or a log. The player is only the short salted hash of the console (never the id the app keeps) and the name the developer gave them there,
+// when there is one, so the developer can open them in the console; a failure here changes nothing: the vote or the report is already saved, and the player gets the same answer.
 
 const WEBHOOK = /^https:\/\/(discord|discordapp)\.com\/api\/webhooks\/\d+\/[\w-]+$/;
 const NAME_TTL_MS = 3_600_000;
@@ -88,6 +88,27 @@ async function cover(appId) {
   covers.set(appId, { at: Date.now(), url });
   return url;
 }
+/** The name the developer gave a player in the console (the set's own table), or null: none given, or the table is not there yet. */
+async function labelOf(env, player, environment) {
+  if (!player || !env.DB) return null;
+  try {
+    const [row] = (await env.DB.prepare(`SELECT label FROM ${environment === "test" ? "player_labels_test" : "player_labels"} WHERE voter = ?`).bind(player).all()).results;
+    return row?.label ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** The player as the channel shows them: the name and the code, or the code alone, with the link to their page in the console. Nothing when the relay has no hash for them. */
+async function playerOf(env, origin, player, environment) {
+  if (!player) return { fields: [], link: "" };
+  const label = await labelOf(env, player, environment);
+  return {
+    fields: [field("Player", label ? `${label} (${player})` : player)],
+    link: ` · [Player](${origin}/console/${environment === "test" ? "test" : "prod"}/player/${player})`,
+  };
+}
+
 const steam = (appId) => `https://store.steampowered.com/app/${appId}`;
 
 const field = (name, value, inline = true) => ({ name, value: String(value).slice(0, 200), inline });
@@ -119,17 +140,18 @@ function later(ctx, work) {
   return work;
 }
 
-export function notifyVote(env, ctx, origin, vote, environment = "prod") {
+export function notifyVote(env, ctx, origin, vote, environment = "prod", player = null) {
   const webhook = webhookOf(env, environment);
   if (!webhook) return undefined;
   return later(ctx, (async () => {
     const answer = ANSWERS[vote.verdict];
     const info = await gameInfo(vote.appId);
     const name = info.name;
+    const who = await playerOf(env, origin, player, environment);
     await send(webhook, {
       title: `${environment === "test" ? "[TEST] " : ""}New vote: ${name}`,
       url: consoleGame(origin, vote.appId, environment),
-      description: `[Steam](${steam(vote.appId)}) · [Console](${consoleGame(origin, vote.appId, environment)})`,
+      description: `[Steam](${steam(vote.appId)}) · [Console](${consoleGame(origin, vote.appId, environment)})${who.link}`,
       thumbnail: { url: await cover(vote.appId) },
       color: answer.color,
       fields: [
@@ -137,6 +159,7 @@ export function notifyVote(env, ctx, origin, vote, environment = "prod") {
         field("Device", DEVICES[vote.device] ?? vote.device),
         field("GamePort", vote.app),
         field("App", vote.appId),
+        ...who.fields,
         ...(vote.game ? [field("Game build", vote.game)] : []),
         ...(vote.issues?.length ? [field("Problems", vote.issues.map((code) => `• ${ISSUE_WORDS[code] ?? code}`).join("\n"), false)] : []),
       ],
@@ -144,18 +167,19 @@ export function notifyVote(env, ctx, origin, vote, environment = "prod") {
   })());
 }
 
-export function notifyReport(env, ctx, origin, report, verdict, environment = "prod") {
+export function notifyReport(env, ctx, origin, report, verdict, environment = "prod", player = null) {
   const webhook = webhookOf(env, environment);
   if (!webhook) return undefined;
   return later(ctx, (async () => {
     const info = await gameInfo(report.appId);
     const name = info.name;
     const answer = verdict ? ANSWERS[verdict] : null;
+    const who = await playerOf(env, origin, player, environment);
     await send(webhook, {
       title: `${environment === "test" ? "[TEST] " : ""}New report: ${name}`,
       url: `${origin}/console/${environment === "test" ? "test" : "prod"}/reports`,
       // The download goes through the console, which only the developer can enter: anyone else who gets the link is turned away.
-      description: `${report.id ? `[Download the report](${origin}/console/api/report?env=${environment}&id=${report.id}) · ` : ""}[Steam](${steam(report.appId)}) · [Console](${consoleGame(origin, report.appId, environment)})`,
+      description: `${report.id ? `[Download the report](${origin}/console/api/report?env=${environment}&id=${report.id}) · ` : ""}[Steam](${steam(report.appId)}) · [Console](${consoleGame(origin, report.appId, environment)})${who.link}`,
       thumbnail: { url: await cover(report.appId) },
       color: answer ? answer.color : 0x9aa4b2,
       fields: [
@@ -164,6 +188,7 @@ export function notifyReport(env, ctx, origin, report, verdict, environment = "p
         field("GamePort", report.app),
         field("Size", `${Math.max(1, Math.round(report.size / 1024))} KB`),
         field("App", report.appId),
+        ...who.fields,
       ],
     });
   })());

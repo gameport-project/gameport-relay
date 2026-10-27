@@ -165,7 +165,7 @@ async function add(message, env, table, environment, ctx, origin) {
     .bind(message.appId, voter, fields.verdict, app, null, fields.device, offline, today, thisHour(), issues.length ? issues.join(",") : null, deviceName(message.model), deviceName(message.codename)).run();
   log("add", { env: environment, appId: message.appId, voter, verdict: fields.verdict, device: fields.device });
   // Told like a player's vote, so the channel can be tried from here; it says the version typed here, or "admin" when none, where a player's says the version of GamePort.
-  notifyVote(env, ctx, origin, { appId: message.appId, verdict: fields.verdict, device: fields.device, offline: offline === 1, app, issues }, environment);
+  notifyVote(env, ctx, origin, { appId: message.appId, verdict: fields.verdict, device: fields.device, offline: offline === 1, app, issues }, environment, voter);
   return json(200, { voter });
 }
 
