@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS reports (
   app     TEXT    NOT NULL,  -- the version of GamePort
   device  TEXT    NOT NULL,  -- quest, pico, phone, tablet or other
   size    INTEGER NOT NULL,  -- bytes of the zip
-  data    TEXT    NOT NULL,  -- the zip, base64
+  data    TEXT    NOT NULL,  -- the zip, base64; empty for a large one, whose parts are in report_parts
   updated TEXT    NOT NULL,  -- the day, YYYY-MM-DD
   handled TEXT,              -- the day the developer dealt with it; empty while it waits. A new report from the same player starts again as not handled
   UNIQUE (app_id, voter)
@@ -118,4 +118,19 @@ CREATE TABLE IF NOT EXISTS player_labels_test (
   voter   TEXT PRIMARY KEY,
   label   TEXT NOT NULL,
   updated TEXT NOT NULL
+);
+
+-- A report of more than 600 000 bytes is cut into parts, each stored as base64 in a row of its own (a row holds 2 MB at most); its row in reports then has an empty data.
+CREATE TABLE IF NOT EXISTS report_parts (
+  report_id INTEGER NOT NULL,  -- the id of the report in reports
+  seq       INTEGER NOT NULL,  -- 0, 1, 2... the order of the parts
+  data      TEXT    NOT NULL,
+  PRIMARY KEY (report_id, seq)
+);
+
+CREATE TABLE IF NOT EXISTS report_parts_test (
+  report_id INTEGER NOT NULL,
+  seq       INTEGER NOT NULL,
+  data      TEXT    NOT NULL,
+  PRIMARY KEY (report_id, seq)
 );

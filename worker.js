@@ -13,8 +13,12 @@ const VERDICTS = new Set(["works", "offline_only", "fails"]);
 const DEVICES = new Set(["quest", "pico", "phone", "tablet", "other"]);
 export { ISSUES };
 const MAX_BODY_BYTES = 1024;
-// A report is a zip of text; a row of the database holds 2 MB at most, and the zip is stored as base64 (a third larger).
-const MAX_REPORT_BYTES = 1_000_000;
+// A report is a zip of text. A row of the database holds 2 MB at most and the zip is stored as base64 (a third larger), so a zip of more than CHUNK_BYTES is cut into parts,
+// each in a row of its own: the largest report accepted still fits.
+const MAX_REPORT_BYTES = 2_000_000;
+const CHUNK_BYTES = 600_000;
+// The table of parts that goes with each table of reports. The names come from here and from nowhere else.
+const PARTS = { reports: "report_parts", reports_test: "report_parts_test" };
 const REPORT_DAYS = 30;
 const MAX_APP_ID = 2_000_000_000;
 
@@ -85,6 +89,23 @@ function fromBase64(text) {
   const bytes = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
   return bytes;
+}
+
+/** The zip of a report: whole in its row, or put together from its parts. Null when there is no such report. */
+export async function readReport(env, table, id) {
+  const [row] = (await env.DB.prepare(`SELECT app_id AS appId, data FROM ${table} WHERE id = ?`).bind(id).all()).results;
+  if (!row) return null;
+  if (row.data !== "") return { appId: row.appId, bytes: fromBase64(row.data) };
+  const parts = (await env.DB.prepare(`SELECT data FROM ${PARTS[table]} WHERE report_id = ? ORDER BY seq`).bind(id).all()).results;
+  if (!parts.length) return null;
+  const pieces = parts.map((part) => fromBase64(part.data));
+  const bytes = new Uint8Array(pieces.reduce((sum, piece) => sum + piece.length, 0));
+  let at = 0;
+  for (const piece of pieces) {
+    bytes.set(piece, at);
+    at += piece.length;
+  }
+  return { appId: row.appId, bytes };
 }
 
 // The routes and the table each one reads and writes. The names of the tables come from here and from nowhere else, never from a message.
@@ -172,12 +193,39 @@ async function report(request, env, table, ctx) {
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
   const oldest = new Date(now.getTime() - REPORT_DAYS * 86_400_000).toISOString().slice(0, 10);
+  const whole = bytes.length <= CHUNK_BYTES;
   try {
     await env.DB.prepare(`INSERT INTO ${table} (app_id, voter, app, device, size, data, updated) VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (app_id, voter) DO UPDATE SET app = excluded.app, device = excluded.device, size = excluded.size, data = excluded.data, updated = excluded.updated, handled = NULL`)
-      .bind(meta.appId, voter, meta.app, meta.device, bytes.length, toBase64(bytes), today).run();
+      .bind(meta.appId, voter, meta.app, meta.device, bytes.length, whole ? toBase64(bytes) : "", today).run();
+    const [saved] = (await env.DB.prepare(`SELECT id FROM ${table} WHERE app_id = ? AND voter = ?`).bind(meta.appId, voter).all()).results;
+    if (!whole) {
+      // The parts of the report this one replaces go first; a large report needs the table of parts, a small one does not (a database that has not had the migration yet still takes it).
+      await env.DB.prepare(`DELETE FROM ${PARTS[table]} WHERE report_id = ?`).bind(saved.id).run();
+      for (let seq = 0, at = 0; at < bytes.length; seq++, at += CHUNK_BYTES) {
+        await env.DB.prepare(`INSERT INTO ${PARTS[table]} (report_id, seq, data) VALUES (?, ?, ?)`).bind(saved.id, seq, toBase64(bytes.subarray(at, at + CHUNK_BYTES))).run();
+      }
+    } else {
+      try {
+        await env.DB.prepare(`DELETE FROM ${PARTS[table]} WHERE report_id = ?`).bind(saved.id).run();
+      } catch {
+        // No table of parts yet: there is nothing to forget.
+      }
+    }
     await env.DB.prepare(`DELETE FROM ${table} WHERE updated < ?`).bind(oldest).run();
+    try {
+      await env.DB.prepare(`DELETE FROM ${PARTS[table]} WHERE report_id NOT IN (SELECT id FROM ${table})`).run();
+    } catch {
+      // Same: no table of parts yet.
+    }
   } catch {
+    // A report cut short must not stay: it would be listed and could not be read.
+    try {
+      await env.DB.prepare(`DELETE FROM ${table} WHERE app_id = ? AND voter = ?`).bind(meta.appId, voter).run();
+      await env.DB.prepare(`DELETE FROM ${PARTS[table]} WHERE report_id NOT IN (SELECT id FROM ${table})`).run();
+    } catch {
+      // Nothing more can be done here.
+    }
     return reply(500, { error: "not saved" });
   }
   if (table === "reports" || table === "reports_test") {
@@ -213,9 +261,9 @@ async function admin(request, env, table, id) {
       const rows = (await env.DB.prepare(`SELECT id, app_id AS appId, app, device, size, updated FROM ${table} ORDER BY updated DESC, id DESC`).all()).results;
       return reply(200, { reports: rows });
     }
-    const [row] = (await env.DB.prepare(`SELECT app_id AS appId, data FROM ${table} WHERE id = ?`).bind(id).all()).results;
-    if (!row) return reply(404, { error: "not found" });
-    return new Response(fromBase64(row.data), { status: 200, headers: { "content-type": "application/zip", "content-disposition": `attachment; filename="gameport-report-${row.appId}-${id}.zip"` } });
+    const found = await readReport(env, table, id);
+    if (!found) return reply(404, { error: "not found" });
+    return new Response(found.bytes, { status: 200, headers: { "content-type": "application/zip", "content-disposition": `attachment; filename="gameport-report-${found.appId}-${id}.zip"` } });
   } catch {
     return reply(500, { error: "not read" });
   }

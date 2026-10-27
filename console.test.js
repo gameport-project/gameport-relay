@@ -19,6 +19,7 @@ function d1(db) {
       return {
         bind: (...args) => ({ run: async () => (statement.run(...args), { success: true }), all: async () => all(args) }),
         all: async () => all([]),
+        run: async () => (statement.run(), { success: true }),
       };
     },
   };
@@ -464,6 +465,23 @@ describe("the reports", () => {
     const all = await (await ask("/console/api/reports?env=prod")).json();
     assert.deepEqual(all.reports.map((r) => r.appId), [5, 6, 5]);
     assert.equal((await (await ask("/console/api/reports?env=test")).json()).reports.length, 1);
+  });
+
+  it("gives a large report back whole, put together from its parts", async () => {
+    const size = 1_700_000;
+    const zip = Buffer.alloc(size);
+    for (let i = 0; i < size; i++) zip[i] = (i * 17 + (i >> 9)) & 255;
+    zip.set([0x50, 0x4b, 0x03, 0x04]);
+    const send = (path) => worker.fetch(new Request(`${ORIGIN}${path}?appId=5&app=0.9.1&device=pico&voter=${VOTER}`, { method: "POST", body: zip }), env);
+    assert.equal((await send("/report")).status, 204);
+    const id = db.prepare("SELECT id FROM reports").get().id;
+    const answer = await ask(`/console/api/report?env=prod&id=${id}`);
+    assert.equal(answer.status, 200);
+    assert.deepEqual(Buffer.from(await answer.arrayBuffer()), zip);
+    assert.equal((await ask(`/console/api/report?env=test&id=${id}`)).status, 404);
+    // A large report is listed without its zip, like the others.
+    const { reports } = await (await ask("/console/api/reports?env=prod")).json();
+    assert.deepEqual([reports[0].size, "data" in reports[0]], [size, false]);
   });
 
   it("gives a report back as the zip file it is, byte for byte, named for its game", async () => {

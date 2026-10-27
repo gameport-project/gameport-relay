@@ -21,6 +21,7 @@ function d1(db) {
       return {
         bind: (...args) => ({ run: async () => (statement.run(...args), { success: true }), all: async () => all(args) }),
         all: async () => all([]),
+        run: async () => (statement.run(), { success: true }),
       };
     },
   };
@@ -390,7 +391,7 @@ describe("the reports", () => {
   it("refuses what is not a zip, a zip that is too large, and facts that are not as expected", async () => {
     assert.equal((await worker.fetch(send(new Uint8Array([1, 2, 3, 4, 5, 6])), env)).status, 400);
     assert.equal((await worker.fetch(send(new Uint8Array(0)), env)).status, 400);
-    const big = new Uint8Array(1_000_001);
+    const big = new Uint8Array(2_000_001);
     big.set([0x50, 0x4b, 0x03, 0x04]);
     assert.equal((await worker.fetch(send(big), env)).status, 413);
     for (const extra of [{ appId: "0" }, { appId: "abc" }, { app: "0.7" }, { device: "toaster" }, { voter: "short" }, { voter: VOTER.toUpperCase() }]) {
@@ -411,6 +412,86 @@ describe("the reports", () => {
     await worker.fetch(send(ZIP, "/report", { voter: OTHER }), env);
     await worker.fetch(send(ZIP, "/report", { appId: "42" }), env);
     assert.equal(count("reports"), 3);
+  });
+
+  describe("a report of up to 2 MB, cut into parts", () => {
+    // A zip of the given size that is not all one byte, so a part put in the wrong place would show.
+    const zipOf = (size) => {
+      const bytes = new Uint8Array(size);
+      for (let i = 0; i < size; i++) bytes[i] = (i * 31 + (i >> 8)) & 255;
+      bytes.set([0x50, 0x4b, 0x03, 0x04]);
+      return bytes;
+    };
+    const parts = (table = "report_parts") => db.prepare(`SELECT report_id, seq, length(data) AS n FROM ${table} ORDER BY report_id, seq`).all().map((row) => ({ ...row }));
+    const download = async (id) => Buffer.from(await (await worker.fetch(read(`/admin/reports/${id}`, "the-developer-token"), env)).arrayBuffer());
+
+    it("takes a zip of exactly 2 000 000 bytes and refuses one more byte", async () => {
+      assert.equal((await worker.fetch(send(zipOf(2_000_000)), env)).status, 204);
+      assert.equal((await worker.fetch(send(zipOf(2_000_001), "/report", { appId: "42" }), env)).status, 413);
+      assert.equal(count("reports"), 1);
+    });
+
+    it("keeps a large report in parts of at most 600 000 bytes, no row near the limit of the database, and gives it back byte for byte", async () => {
+      const zip = zipOf(1_900_000);
+      assert.equal((await worker.fetch(send(zip), env)).status, 204);
+      const row = db.prepare("SELECT id, size, data FROM reports").get();
+      assert.equal(row.size, 1_900_000);
+      assert.equal(row.data, "");
+      const stored = parts();
+      assert.equal(stored.length, 4);
+      assert.ok(stored.every((part) => part.report_id === row.id && part.n <= 800_000));
+      assert.deepEqual(stored.map((part) => part.seq), [0, 1, 2, 3]);
+      assert.deepEqual(await download(row.id), Buffer.from(zip));
+    });
+
+    it("keeps a small report whole in its row, as before, with no part", async () => {
+      assert.equal((await worker.fetch(send(zipOf(600_000)), env)).status, 204);
+      assert.notEqual(db.prepare("SELECT data FROM reports").get().data, "");
+      assert.deepEqual(parts(), []);
+    });
+
+    it("forgets the parts of a report that a new one replaces, whether the new one is small or large", async () => {
+      await worker.fetch(send(zipOf(1_500_000)), env);
+      const id = db.prepare("SELECT id FROM reports").get().id;
+      assert.equal(parts().length, 3);
+      await worker.fetch(send(zipOf(700_000), "/report", { app: "0.7.5" }), env);
+      assert.equal(parts().length, 2);
+      assert.deepEqual(await download(id), Buffer.from(zipOf(700_000)));
+      await worker.fetch(send(ZIP, "/report", { app: "0.7.6" }), env);
+      assert.deepEqual(parts(), []);
+      assert.deepEqual([...await download(id)], [...ZIP]);
+      assert.equal(count("reports"), 1);
+    });
+
+    it("removes the parts of the reports it forgets after 30 days", async () => {
+      await worker.fetch(send(zipOf(1_300_000), "/report", { appId: "42" }), env);
+      db.prepare("UPDATE reports SET updated = '2000-01-01'").run();
+      await worker.fetch(send(ZIP), env);
+      assert.equal(count("reports"), 1);
+      assert.deepEqual(parts(), []);
+    });
+
+    it("keeps the test builds' parts in their own table", async () => {
+      assert.equal((await worker.fetch(send(zipOf(1_300_000), "/test/report"), env)).status, 204);
+      assert.equal(parts().length, 0);
+      assert.equal(parts("report_parts_test").length, 3);
+      const id = db.prepare("SELECT id FROM reports_test").get().id;
+      const zip = await worker.fetch(read(`/admin/test/reports/${id}`, "the-developer-token"), env);
+      assert.deepEqual(Buffer.from(await zip.arrayBuffer()), Buffer.from(zipOf(1_300_000)));
+    });
+
+    it("still takes a small report on a database that has not had the migration, and does not keep half of a large one", async () => {
+      db.exec("DROP TABLE report_parts; DROP TABLE report_parts_test;");
+      assert.equal((await worker.fetch(send(ZIP), env)).status, 204);
+      assert.equal((await worker.fetch(send(zipOf(1_300_000), "/report", { appId: "42" }), env)).status, 500);
+      assert.equal(count("reports"), 1);
+    });
+
+    it("gives a report that was stored whole before the parts existed", async () => {
+      db.prepare("INSERT INTO reports (app_id, voter, app, device, size, data, updated) VALUES (7, 'aaaaaaaaaaaa', '0.7.4', 'quest', ?, ?, '2026-10-01')").run(ZIP.length, Buffer.from(ZIP).toString("base64"));
+      const id = db.prepare("SELECT id FROM reports").get().id;
+      assert.deepEqual([...await download(id)], [...ZIP]);
+    });
   });
 
   it("keeps the test builds in their own table", async () => {

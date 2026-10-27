@@ -11,7 +11,7 @@ import { deviceLabel } from "./device_names.js";
 import { ISSUE_SET } from "./issues.js";
 import { consolePage } from "./console_page.js";
 import { notifyVote } from "./notify.js";
-import { deviceName, thisHour, voterHash } from "./worker.js";
+import { deviceName, readReport, thisHour, voterHash } from "./worker.js";
 
 const VERDICTS = new Set(["works", "offline_only", "fails"]);
 const DEVICES = new Set(["quest", "pico", "phone", "tablet", "other"]);
@@ -276,8 +276,6 @@ async function appPrice(url) {
   }
 }
 
-const fromBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
-
 /**
  * The reports of a game, or the latest ones of every game when no game is given, the ones not handled first. Not the zips: those are downloaded one by one.
  * Each report carries the answer of the same player for the same game (it may have changed since the report was sent), and the answer is null when the
@@ -358,10 +356,10 @@ async function downloadReport(url, env) {
   const id = Number(url.searchParams.get("id"));
   if (!table) return json(400, { error: "bad env" });
   if (!Number.isInteger(id) || id < 1) return json(400, { error: "bad id" });
-  const [row] = (await env.DB.prepare(`SELECT app_id AS appId, data FROM ${table} WHERE id = ?`).bind(id).all()).results;
-  if (!row) return json(404, { error: "no such report" });
-  const name = `gameport-report-${row.appId}-${id}.zip`;
-  return new Response(fromBase64(row.data), {
+  const found = await readReport(env, table, id);
+  if (!found) return json(404, { error: "no such report" });
+  const name = `gameport-report-${found.appId}-${id}.zip`;
+  return new Response(found.bytes, {
     headers: { "content-type": "application/zip", "content-disposition": `attachment; filename="${name}"`, "cache-control": "no-store", "x-content-type-options": "nosniff" },
   });
 }
