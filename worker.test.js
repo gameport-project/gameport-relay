@@ -35,6 +35,11 @@ describe("validate", () => {
     assert.deepEqual(vote, { ...expected, offline: false, issues: [] });
   });
 
+  it("takes the version of an alpha build, which carries its own mark", () => {
+    for (const app of ["0.9.1-alpha.2", "0.9.1-alpha.12345"]) assert.equal(validate(goodMessage({ app })).error, undefined, app);
+    for (const app of ["0.9.1-alpha", "0.9.1-alpha.", "0.9.1-alpha.x", "0.9.1-alpha.123456", "0.9.1-beta.2"]) assert.ok(validate(goodMessage({ app })).error, app);
+  });
+
   it("refuses everything that is not exactly what the app sends", () => {
     const bad = [
       null, [], "text", 7,

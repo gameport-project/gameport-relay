@@ -21,6 +21,8 @@ export { ISSUES };
 const MAX_BODY_BYTES = 1024;
 // A report is a zip of text. A row of the database holds 2 MB at most and the zip is stored as base64 (a third larger), so a zip of more than CHUNK_BYTES is cut into parts,
 // each in a row of its own: the largest report accepted still fits.
+// A release is "0.9.1"; a test build of the CI adds its own mark, "0.9.1-alpha.2".
+const APP_VERSION = /^\d{1,3}\.\d{1,3}\.\d{1,3}(-alpha\.\d{1,5})?$/;
 const MAX_REPORT_BYTES = 2_000_000;
 const CHUNK_BYTES = 600_000;
 // The table of parts that goes with each table of reports. The names come from here and from nowhere else.
@@ -39,7 +41,7 @@ export function validate(message) {
   if (message.v !== 1) return { error: "unknown version" };
   if (!Number.isInteger(message.appId) || message.appId < 1 || message.appId > MAX_APP_ID) return { error: "bad appId" };
   if (!VERDICTS.has(message.verdict)) return { error: "bad verdict" };
-  if (typeof message.app !== "string" || !/^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(message.app)) return { error: "bad app version" };
+  if (typeof message.app !== "string" || !APP_VERSION.test(message.app)) return { error: "bad app version" };
   if (!DEVICES.has(message.device)) return { error: "bad device" };
   if (typeof message.voter !== "string" || !/^[0-9a-f]{32}$/.test(message.voter)) return { error: "bad voter" };
   if (message.game !== undefined && (typeof message.game !== "string" || !/^[0-9A-Za-z._-]{1,32}$/.test(message.game))) return { error: "bad game" };
@@ -73,7 +75,7 @@ export function validateReportMeta(params) {
   const appId = Number(params.get("appId"));
   if (!Number.isInteger(appId) || appId < 1 || appId > MAX_APP_ID) return { error: "bad appId" };
   const app = params.get("app");
-  if (typeof app !== "string" || !/^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(app)) return { error: "bad app version" };
+  if (typeof app !== "string" || !APP_VERSION.test(app)) return { error: "bad app version" };
   const device = params.get("device");
   if (!DEVICES.has(device)) return { error: "bad device" };
   const voter = params.get("voter");
