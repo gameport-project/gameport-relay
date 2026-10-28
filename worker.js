@@ -13,6 +13,9 @@ const VERDICTS = new Set(["works", "offline_only", "fails"]);
 // What became of the report that goes with an answer, as the app tells it: `sent` (the relay has it), `waiting` (kept on the device, no network or the relay busy), `refused` (the relay will
 // not take it) and `none` (there is none: the game is not installed, or the report is too large).
 export const REPORT_STATES = new Set(["sent", "waiting", "refused", "none"]);
+// What the developer can tell the app about a game, from the console: the setting, and the values it takes. The app reads them on a public route (ids and words only) and applies them
+// where the player did not choose; a setting that is not here is refused by the console and never published.
+export const GAME_SETTINGS = { passthrough: new Set(["on"]) };
 const DEVICES = new Set(["quest", "pico", "phone", "tablet", "other"]);
 export { ISSUES };
 const MAX_BODY_BYTES = 1024;
@@ -121,6 +124,8 @@ const ROUTES = {
   "/test/summary": { table: "votes_test", write: false },
   "/report": { table: "reports", report: true },
   "/test/report": { table: "reports_test", report: true },
+  "/game-defaults": { table: "game_defaults", defaults: true },
+  "/test/game-defaults": { table: "game_defaults_test", defaults: true },
   "/incompatible": { table: "incompatible", reasons: "incompatible_reasons", list: true },
   "/test/incompatible": { table: "incompatible_test", reasons: "incompatible_reasons_test", list: true },
 };
@@ -360,6 +365,22 @@ async function incompatibleList(env, table, reasonsTable) {
   return reply(200, { v: 1, reasons: byId, games }, { "cache-control": "public, max-age=300" });
 }
 
+/** What the developer told the app about each game: `{ "804530": { "passthrough": "on" } }`. Nothing about any player; a setting this version does not know is left out. */
+async function gameDefaults(env, table) {
+  let rows;
+  try {
+    rows = (await env.DB.prepare(`SELECT app_id AS appId, setting, value FROM ${table} ORDER BY app_id, setting`).all()).results;
+  } catch {
+    return reply(500, { error: "not read" });
+  }
+  const games = {};
+  for (const row of rows) {
+    if (!GAME_SETTINGS[row.setting]?.has(row.value)) continue;
+    (games[row.appId] ??= {})[row.setting] = row.value;
+  }
+  return reply(200, { v: 1, games }, { "cache-control": "public, max-age=300" });
+}
+
 export default {
   async fetch(request, env, ctx) {
     const path = new URL(request.url).pathname;
@@ -377,6 +398,7 @@ export default {
     const route = ROUTES[path];
     if (!route) return reply(404, { error: "not found" });
     if (!env.DB) return reply(500, { error: "relay not configured" });
+    if (route.defaults) return request.method === "GET" ? gameDefaults(env, route.table) : reply(405, { error: "use GET" });
     if (route.list) return request.method === "GET" ? incompatibleList(env, route.table, route.reasons) : reply(405, { error: "use GET" });
     if (route.report) return request.method === "POST" ? report(request, env, route.table, ctx) : reply(405, { error: "use POST" });
     if (!route.write) return request.method === "GET" ? summary(env, route.table) : reply(405, { error: "use GET" });

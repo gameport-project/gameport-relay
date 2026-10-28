@@ -525,6 +525,69 @@ describe("the state of the report in the console", () => {
   });
 });
 
+describe("what the developer tells the app about a game", () => {
+  const setDefault = (body) => ask("/console/api/game-default-set", { method: "POST", body: { env: "prod", appId: 804530, setting: "passthrough", value: "on", ...body } });
+  const publicList = async (path = "/game-defaults") => (await worker.fetch(new Request(`${ORIGIN}${path}`), env));
+
+  it("gives a game a setting, which the public route then publishes for everyone, with ids and words only", async () => {
+    assert.equal((await setDefault({})).status, 200);
+    assert.deepEqual(db.prepare("SELECT app_id, setting, value FROM game_defaults").all().map((r) => ({ ...r })), [{ app_id: 804530, setting: "passthrough", value: "on" }]);
+    const answer = await publicList();
+    assert.equal(answer.status, 200);
+    assert.equal(answer.headers.get("cache-control"), "public, max-age=300");
+    assert.deepEqual(await answer.json(), { v: 1, games: { 804530: { passthrough: "on" } } });
+  });
+
+  it("changes nothing when the same setting is given twice, lists every game, and takes a setting away with a null value", async () => {
+    await setDefault({});
+    await setDefault({});
+    await setDefault({ appId: 3748900 });
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM game_defaults").get().n, 2);
+    const listed = await (await ask("/console/api/game-defaults?env=prod")).json();
+    assert.deepEqual(listed.games.map((g) => [g.appId, g.setting, g.value]), [[804530, "passthrough", "on"], [3748900, "passthrough", "on"]]);
+    assert.deepEqual(listed.settings, { passthrough: ["on"] });
+    assert.equal((await setDefault({ value: null })).status, 200);
+    assert.deepEqual(Object.keys((await (await publicList()).json()).games), ["3748900"]);
+  });
+
+  it("keeps the real set and the test set apart, each on its own public route", async () => {
+    await setDefault({ env: "test", appId: 5 });
+    assert.deepEqual((await (await publicList()).json()).games, {});
+    assert.deepEqual((await (await publicList("/test/game-defaults")).json()).games, { 5: { passthrough: "on" } });
+    assert.deepEqual((await (await ask("/console/api/game-defaults?env=test")).json()).games.map((g) => g.appId), [5]);
+    assert.deepEqual((await (await ask("/console/api/game-defaults?env=prod")).json()).games, []);
+  });
+
+  it("refuses a setting, a value or a game that is not one, and a set that is not one", async () => {
+    for (const bad of [{ setting: "recenter" }, { setting: "__proto__" }, { setting: "constructor" }, { value: "off" }, { value: 1 }, { value: "" }, { appId: 0 }, { appId: "804530" }, { appId: 3000000000 }]) {
+      assert.equal((await setDefault(bad)).status, 400, JSON.stringify(bad));
+    }
+    assert.equal((await setDefault({ env: "votes" })).status, 400);
+    assert.equal((await ask("/console/api/game-defaults?env=votes")).status, 400);
+    assert.deepEqual(db.prepare("SELECT * FROM game_defaults").all(), []);
+  });
+
+  it("publishes only what this version knows, so a value written by a later one is never given to the app", async () => {
+    db.prepare("INSERT INTO game_defaults (app_id, setting, value, updated) VALUES (1, 'passthrough', 'maybe', '2026-10-28'), (2, 'future_setting', 'on', '2026-10-28'), (3, 'passthrough', 'on', '2026-10-28')").run();
+    assert.deepEqual((await (await publicList()).json()).games, { 3: { passthrough: "on" } });
+  });
+
+  it("answers GET only on the public route, needs the page for a write, and serves the page of the list", async () => {
+    assert.equal((await worker.fetch(new Request(`${ORIGIN}/game-defaults`, { method: "POST", body: "{}" }), env)).status, 405);
+    assert.equal((await ask("/console/api/game-default-set", { method: "POST", body: { env: "prod", appId: 1, setting: "passthrough", value: "on" }, page: false })).status, 403);
+    assert.equal((await ask("/console/prod/defaults")).status, 200);
+    assert.equal((await ask("/console/test/defaults")).status, 200);
+  });
+
+  it("is added by its migration to a database that lacks the tables, and the migration runs twice without harm", () => {
+    const old = new DatabaseSync(":memory:");
+    old.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replace(/CREATE TABLE IF NOT EXISTS game_defaults(_test)?[^;]*;/g, ""));
+    assert.equal(old.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name LIKE 'game_defaults%'").get().n, 0);
+    for (let i = 0; i < 2; i++) old.exec(readFileSync(new URL("./migrations/0018_game_defaults.sql", import.meta.url), "utf8"));
+    assert.equal(old.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name LIKE 'game_defaults%'").get().n, 2);
+  });
+});
+
 describe("the players", () => {
   const ZIP = Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 250, 255]);
   const report = (table, appId, voter, day) =>

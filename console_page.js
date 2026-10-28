@@ -54,6 +54,13 @@ input[type=search]:focus, .field:focus { border-color:rgba(255,255,255,.4); }
 .sbox-menu .sdot { width:9px; height:9px; border-radius:50%; flex:none; }
 .sdot-4cc38a { background:#4cc38a; } .sdot-f0b24a { background:#f0b24a; } .sdot-ef6b6b { background:#ef6b6b; }
 .report-state { margin-top:6px; }
+.tgl-row { display:flex; align-items:center; justify-content:space-between; gap:16px; cursor:pointer; padding:6px 0; font-weight:600; }
+.tgl-row small { display:block; font-weight:400; font-size:12px; margin-top:2px; }
+.tgl { appearance:none; -webkit-appearance:none; flex:none; margin:0; width:46px; height:26px; border-radius:999px; background:rgba(255,255,255,.16); border:1px solid var(--line); position:relative; cursor:pointer; transition:background .15s; }
+.tgl::after { content:""; position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%; background:#fff; transition:transform .15s; }
+.tgl:checked { background:#4cc38a; border-color:transparent; }
+.tgl:checked::after { transform:translateX(20px); }
+.tgl:focus-visible { outline:2px solid rgba(255,255,255,.6); outline-offset:2px; }
 .discord-icon { color:#8c96ff; vertical-align:-2px; margin-right:6px; flex:none; }
 .only[aria-pressed="true"] { background:#fff; color:#111; border-color:transparent; }
 .muted { color:var(--muted); }
@@ -179,6 +186,7 @@ a.btn { display:inline-flex; align-items:center; text-decoration:none; }
     <button type="button" class="banner-btn" id="latest">Latest reports<span class="badge" id="latest-count" hidden></span></button>
     <button type="button" class="banner-btn" id="news">What is new<span class="badge" id="news-count" hidden></span></button>
     <button type="button" class="banner-btn" id="reasons">Incompatibility reasons</button>
+    <button type="button" class="banner-btn" id="defaults">Game settings</button>
   </nav>
 </div>
 <main>
@@ -200,7 +208,7 @@ a.btn { display:inline-flex; align-items:center; text-decoration:none; }
 var CATALOG = "https://raw.githubusercontent.com/gameport-project/gameport-catalog/main/v1/catalog.json";
 var DEVICES = ["quest", "pico", "phone", "tablet", "other"];
 var VERDICTS = { works: "Works", offline_only: "Offline only", fails: "Does not work" };
-var state = { env: "test", games: [], current: null, votes: [], counts: {}, onlyVoted: false, incompat: {}, reasons: [], view: "", playerId: null, statuses: {}, extra: {}, unhandled: 0, waiting: {}, news: null, device: "all", ready: false };
+var state = { env: "test", games: [], current: null, votes: [], counts: {}, onlyVoted: false, incompat: {}, reasons: [], view: "", playerId: null, statuses: {}, defaults: {}, defaultRows: [], extra: {}, unhandled: 0, waiting: {}, news: null, device: "all", ready: false };
 
 function el(tag, attrs, children) {
   var node = document.createElement(tag);
@@ -247,10 +255,12 @@ function setEnv(env) {
   loadWaiting();
   loadNews();
   loadIncompatible();
+  loadDefaults();
   loadCounts().then(function () {
     drawGames();
     if (state.view === "reports") showLatestReports();
     else if (state.view === "news") showNews();
+    else if (state.view === "defaults") showDefaults();
     else if (state.view === "player" && state.playerId) showPlayer(state.playerId);
     else if (state.current) loadVotes();
   });
@@ -265,6 +275,76 @@ function loadIncompatible() {
     if (state.view === "reasons") drawReasons();
     else if (state.current && state.view === "game") drawIncompatible();
   }).catch(function () { state.incompat = {}; state.reasons = []; });
+}
+
+/** What the developer tells the app about each game, for this set: read again after each change, and drawn where it is open. */
+function loadDefaults() {
+  return call("/console/api/game-defaults?env=" + state.env).then(function (data) {
+    state.defaultRows = data.games;
+    state.defaults = {};
+    data.games.forEach(function (row) { (state.defaults[row.appId] = state.defaults[row.appId] || {})[row.setting] = row.value; });
+    if (state.view === "defaults") drawDefaults();
+    else if (state.current && state.view === "game") drawGameDefaults();
+  }).catch(function () { state.defaults = {}; state.defaultRows = []; });
+}
+
+/** The block of the open game that says what the app is told about it. For now one setting: the game declares the headset's passthrough, which the app does when the player left the choice on automatic. */
+function drawGameDefaults() {
+  var g = state.current;
+  var holder = document.getElementById("game-defaults");
+  if (!holder) return;
+  var before = holder.querySelector("details");
+  var wasOpen = !!before && before.open;
+  holder.textContent = "";
+  var on = (state.defaults[g.appid] || {}).passthrough === "on";
+  // A switch at the right of its name: on, the app declares the passthrough for this game; a change is asked for in production and written at once.
+  var toggle = el("input", { type: "checkbox", class: "tgl", role: "switch", "aria-label": "Passthrough" });
+  toggle.checked = on;
+  toggle.addEventListener("change", function () {
+    var wanted = toggle.checked;
+    if (!confirmWrite((wanted ? "Declare the passthrough for " : "Stop declaring the passthrough for ") + g.name + ". The app reads it once a day, and when it patches a game.")) { toggle.checked = !wanted; return; }
+    toggle.disabled = true;
+    call("/console/api/game-default-set", { appId: g.appid, setting: "passthrough", value: wanted ? "on" : null }).then(function () { toast("Saved"); loadDefaults(); }).catch(function (e) { toggle.checked = !wanted; toggle.disabled = false; toast(e.message, true); });
+  });
+  // Folded like the blocks around it, with the line saying where the game stands; it stays open after a change, so the result is seen.
+  var box = el("details", { class: "incompat" }, [
+    el("summary", { text: on ? "Settings sent to the app: passthrough declared" : "Settings sent to the app: none" }),
+    el("div", { class: "add stack" }, [
+      el("label", { class: "tgl-row" }, [el("span", {}, [document.createTextNode("Passthrough"), el("small", { class: "muted", text: "Declared by the app, unless the player chose otherwise" })]), toggle]),
+    ]),
+  ]);
+  box.open = wasOpen;
+  holder.appendChild(box);
+}
+
+function showDefaults() {
+  state.current = null;
+  state.view = "defaults";
+  drawGames();
+  drawDefaults();
+}
+
+/** The list of what the app is told, game by game, to look at it and to take a setting away. */
+function drawDefaults() {
+  var panel = document.getElementById("detail");
+  panel.textContent = "";
+  panel.appendChild(el("h2", { text: "Game settings (" + (state.env === "prod" ? "production" : "test") + ")" }));
+  panel.appendChild(el("p", { class: "muted", text: "What the app is told about each game. It reads this once a day and when it patches a game, and applies it where the player left the choice on automatic. A game is added from its own page." }));
+  if (!state.defaultRows.length) {
+    panel.appendChild(el("p", { class: "muted", text: "No game has a setting." }));
+    return;
+  }
+  var table = el("table", {}, [el("thead", {}, [el("tr", {}, ["Game", "Setting", "Since", ""].map(function (h) { return el("th", { text: h }); }))])]);
+  var body = el("tbody");
+  state.defaultRows.forEach(function (row) {
+    var remove = el("button", { type: "button", class: "btn danger", text: "Remove", onclick: function () {
+      if (!confirmWrite("Remove the " + row.setting + " setting of app " + row.appId + ".")) return;
+      call("/console/api/game-default-set", { appId: row.appId, setting: row.setting, value: null }).then(function () { toast("Removed"); loadDefaults(); }).catch(function (e) { toast(e.message, true); });
+    } });
+    body.appendChild(el("tr", {}, [el("td", {}, [gameLink(row.appId)]), el("td", { text: row.setting === "passthrough" ? "Passthrough declared" : row.setting + ": " + row.value }), el("td", { text: formatDay(row.updated) }), el("td", {}, [remove])]));
+  });
+  table.appendChild(body);
+  panel.appendChild(el("div", { class: "scroll" }, [table]));
 }
 
 function textField(label, value, long) {
@@ -445,7 +525,7 @@ function majority(c) {
 /** The address says the set and what is open (/console/prod/1125240, /console/test/news): a refresh, a copied link or a bookmark comes back to the same place. */
 function syncUrl() {
   if (!state.ready) return;
-  var tail = state.view === "player" && state.playerId ? "/player/" + state.playerId : state.view === "game" && state.current ? "/" + state.current.appid : state.view === "reports" || state.view === "news" || state.view === "reasons" ? "/" + state.view : "";
+  var tail = state.view === "player" && state.playerId ? "/player/" + state.playerId : state.view === "game" && state.current ? "/" + state.current.appid : state.view === "reports" || state.view === "news" || state.view === "reasons" || state.view === "defaults" ? "/" + state.view : "";
   var path = "/console/" + state.env + tail + (state.onlyVoted ? "?voted" : "");
   if (location.pathname + location.search !== path) history.pushState(null, "", path);
 }
@@ -888,6 +968,8 @@ function drawDetail() {
 
   panel.appendChild(el("div", { id: "incompat" }));
   drawIncompatible();
+  panel.appendChild(el("div", { id: "game-defaults" }));
+  drawGameDefaults();
 
   var device = select(DEVICES, "quest");
   var verdict = select(Object.keys(VERDICTS), "works", VERDICTS);
@@ -1074,6 +1156,7 @@ document.getElementById("device").addEventListener("change", function () {
 });
 document.getElementById("latest").addEventListener("click", showLatestReports);
 document.getElementById("reasons").addEventListener("click", showReasons);
+document.getElementById("defaults").addEventListener("click", showDefaults);
 document.getElementById("news").addEventListener("click", showNews);
 document.getElementById("only").addEventListener("click", function () {
   state.onlyVoted = !state.onlyVoted;
@@ -1085,7 +1168,7 @@ fetch(CATALOG).then(function (r) { return r.json(); }).then(function (data) {
   state.games = data.apps.slice().sort(function (a, b) { return a.name.localeCompare(b.name); });
   // The address says what to open: /console/prod/1125240 a game in production, /console/test/reports or /news or /reasons a page, ?voted only the games with votes.
   // The old addresses (#1125240/prod, #reports, #voted) still open the same thing, and are rewritten.
-  var route = location.pathname.match(/^\\/console\\/(test|prod)(?:\\/(\\d+|reports|news|reasons|player\\/[0-9a-f]{12}))?\\/?$/);
+  var route = location.pathname.match(/^\\/console\\/(test|prod)(?:\\/(\\d+|reports|news|reasons|defaults|player\\/[0-9a-f]{12}))?\\/?$/);
   var env = route ? route[1] : "test";
   var section = route ? route[2] : null;
   var old = location.hash.match(/^#(?:(\\d+)|(reports))(\\/prod)?$/);
@@ -1095,6 +1178,7 @@ fetch(CATALOG).then(function (r) { return r.json(); }).then(function (data) {
   if (section === "reports") showLatestReports();
   else if (section === "news") showNews();
   else if (section === "reasons") showReasons();
+  else if (section === "defaults") showDefaults();
   else if (section && section.indexOf("player/") === 0) showPlayer(section.slice(7));
   else if (section) {
     var id = Number(section);

@@ -38,6 +38,10 @@ GET /admin/test/reports     the same for the test builds (and /admin/test/report
 
 For example: `curl -H "Authorization: Bearer $TOKEN" https://<the relay>/admin/reports/3 -o report-3.zip`. Without the secret set in the relay, or with a wrong token, every one of these answers 404 as if the route did not exist.
 
+## What the app is told about a game
+
+`GET /game-defaults` (and `GET /test/game-defaults`) returns what the developer told the app about the games from the console, ids and words only: `{"v":1,"games":{"804530":{"passthrough":"on"}}}`. For now there is one setting, `passthrough` with the value `on`: the game declares the headset's passthrough, which the app does when the player left the choice for that game on automatic (the player's own choice always wins). A setting or a value that this version does not know is never published. The console adds or takes a game away from its page (**This game has a passthrough**), and the **Game settings** page lists them all. The app reads the list at most once a day and again just before it patches a game; until it has read one it uses the games it has always known. The table is `game_defaults` (`game_defaults_test` for the test set), one row for each game and setting, so another setting is one more word in `GAME_SETTINGS` of `worker.js`, with no migration. A database made earlier needs `migrations/0018_game_defaults.sql` run once, before the relay that reads it is deployed.
+
 ## Test routes
 
 `POST /test/vote`, `GET /test/summary` and `POST /test/report` work the same on their own tables (`votes_test`, `reports_test`). The test builds of the app use them, so a test never reaches the real totals or the real reports.

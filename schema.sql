@@ -136,3 +136,21 @@ CREATE TABLE IF NOT EXISTS report_parts_test (
   data      TEXT    NOT NULL,
   PRIMARY KEY (report_id, seq)
 );
+
+-- What the developer tells the app about a game, from the console: one row for each game and setting (for now only `passthrough`, with the value `on`: the game declares the headset's
+-- passthrough, which the app does for the games on this list when the player left the choice on automatic). The app reads them on a public route, so a game added here is so for everyone.
+CREATE TABLE IF NOT EXISTS game_defaults (
+  app_id  INTEGER NOT NULL,
+  setting TEXT    NOT NULL,
+  value   TEXT    NOT NULL,
+  updated TEXT    NOT NULL,  -- the day, YYYY-MM-DD
+  PRIMARY KEY (app_id, setting)
+);
+
+CREATE TABLE IF NOT EXISTS game_defaults_test (
+  app_id  INTEGER NOT NULL,
+  setting TEXT    NOT NULL,
+  value   TEXT    NOT NULL,
+  updated TEXT    NOT NULL,
+  PRIMARY KEY (app_id, setting)
+);

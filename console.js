@@ -11,7 +11,7 @@ import { deviceLabel } from "./device_names.js";
 import { ISSUE_SET } from "./issues.js";
 import { consolePage } from "./console_page.js";
 import { notifyVote } from "./notify.js";
-import { deviceName, readReport, thisHour, voterHash } from "./worker.js";
+import { GAME_SETTINGS, deviceName, readReport, thisHour, voterHash } from "./worker.js";
 
 const VERDICTS = new Set(["works", "offline_only", "fails"]);
 const DEVICES = new Set(["quest", "pico", "phone", "tablet", "other"]);
@@ -29,6 +29,8 @@ const LABEL_TABLES = { prod: "player_labels", test: "player_labels_test" };
 const MAX_LABEL = 40;
 // The games confirmed as incompatible, for the same two sets.
 const INCOMPATIBLE_TABLES = { prod: { games: "incompatible", reasons: "incompatible_reasons" }, test: { games: "incompatible_test", reasons: "incompatible_reasons_test" } };
+// What the developer tells the app about each game, for the same two sets (see GAME_SETTINGS in worker.js).
+const DEFAULTS_TABLES = { prod: "game_defaults", test: "game_defaults_test" };
 const HEADER = "x-gameport-console";
 
 const json = (status, body, extra = {}) =>
@@ -485,10 +487,36 @@ async function seen(message, env, _table, environment) {
   return json(200, { ok: true });
 }
 
-const WRITES = { "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove, "/console/api/report-handled": handleReport, "/console/api/incompatible-set": setIncompatible, "/console/api/reason-set": setReason, "/console/api/reason-remove": removeReason, "/console/api/incompatible-remove": removeIncompatible, "/console/api/seen": seen, "/console/api/player-label": setLabel };
+/** Everything the app is told about the games, for the chosen set: the settings with the day each was given. */
+async function listDefaults(url, env) {
+  const table = DEFAULTS_TABLES[url.searchParams.get("env")];
+  if (!table) return json(400, { error: "bad env" });
+  const rows = (await env.DB.prepare(`SELECT app_id AS appId, setting, value, updated FROM ${table} ORDER BY app_id, setting`).all()).results;
+  return json(200, { settings: Object.fromEntries(Object.entries(GAME_SETTINGS).map(([name, values]) => [name, [...values]])), games: rows });
+}
+
+/** Gives a game a setting for the app, or takes it away with a null value: the app and the site read it at once, for every player. */
+async function setDefault(message, env, _table, environment) {
+  const table = DEFAULTS_TABLES[environment];
+  if (!validId(message.appId)) return json(400, { error: "bad appId" });
+  if (typeof message.setting !== "string" || !Object.hasOwn(GAME_SETTINGS, message.setting)) return json(400, { error: "bad setting" });
+  if (message.value === null || message.value === undefined) {
+    await env.DB.prepare(`DELETE FROM ${table} WHERE app_id = ? AND setting = ?`).bind(message.appId, message.setting).run();
+    log("game-default-clear", { env: environment, appId: message.appId, setting: message.setting });
+    return json(200, { ok: true });
+  }
+  if (typeof message.value !== "string" || !GAME_SETTINGS[message.setting].has(message.value)) return json(400, { error: "bad value" });
+  const today = new Date().toISOString().slice(0, 10);
+  await env.DB.prepare(`INSERT INTO ${table} (app_id, setting, value, updated) VALUES (?, ?, ?, ?) ON CONFLICT (app_id, setting) DO UPDATE SET value = excluded.value, updated = excluded.updated`)
+    .bind(message.appId, message.setting, message.value, today).run();
+  log("game-default-set", { env: environment, appId: message.appId, setting: message.setting, value: message.value });
+  return json(200, { ok: true });
+}
+
+const WRITES = { "/console/api/game-default-set": setDefault, "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove, "/console/api/report-handled": handleReport, "/console/api/incompatible-set": setIncompatible, "/console/api/reason-set": setReason, "/console/api/reason-remove": removeReason, "/console/api/incompatible-remove": removeIncompatible, "/console/api/seen": seen, "/console/api/player-label": setLabel };
 
 /** The page answers at /console and at an address that names the set and what is open: /console/prod, /console/test/1125240, /console/prod/reports, /console/prod/news, /console/test/reasons. */
-const PAGE_PATH = /^\/console\/?$|^\/console\/(test|prod)(\/(\d{1,10}|reports|news|reasons|player\/[0-9a-f]{12}))?\/?$/;
+const PAGE_PATH = /^\/console\/?$|^\/console\/(test|prod)(\/(\d{1,10}|reports|news|reasons|defaults|player\/[0-9a-f]{12}))?\/?$/;
 
 /** The routes of the console. Returns a response, or null when the path is not one of the console's. */
 export async function handleConsole(request, env, ctx) {
@@ -516,6 +544,7 @@ export async function handleConsole(request, env, ctx) {
     if (url.pathname === "/console/api/news") return request.method === "GET" ? await news(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/incompatible") return request.method === "GET" ? await listIncompatible(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/reports") return request.method === "GET" ? await listReports(url, env) : json(405, { error: "use GET" });
+    if (url.pathname === "/console/api/game-defaults") return request.method === "GET" ? await listDefaults(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/player") return request.method === "GET" ? await player(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/report") return request.method === "GET" ? await downloadReport(url, env) : json(405, { error: "use GET" });
     const write = WRITES[url.pathname];
