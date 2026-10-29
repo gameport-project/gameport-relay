@@ -37,8 +37,11 @@ async function gameInfo(appId) {
       return info;
     }
   } catch {
-    // The number is enough.
+    // The catalog may still know it.
   }
+  // Steam's store gave nothing for it (a delay, a page it keeps back): the name the catalog has, which is the one the console shows. Not kept, so that Steam is asked again next time.
+  const entry = (await catalogApps()).get(appId);
+  if (entry && typeof entry.name === "string" && entry.name.trim()) return { name: entry.name.trim().slice(0, 120) };
   return { name: `App ${appId}` };
 }
 

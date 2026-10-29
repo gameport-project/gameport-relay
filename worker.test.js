@@ -589,7 +589,7 @@ describe("the messages to the developer's private channel", () => {
     realFetch = globalThis.fetch;
     globalThis.fetch = async (url, options) => {
       if (String(url).startsWith("https://store.steampowered.com/")) return new Response(JSON.stringify({ 846470: { success: true, data: { name: "A Game" } }, 5219700: { success: true, data: { name: "A Demo" } } }));
-      if (String(url).startsWith("https://raw.githubusercontent.com/")) return new Response(JSON.stringify({ apps: [{ appid: 5219700, parent: 3456660, cover: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/5219700/abc123/library_capsule.jpg", header: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/5219700/def456/header.jpg" }] }));
+      if (String(url).startsWith("https://raw.githubusercontent.com/")) return new Response(JSON.stringify({ apps: [{ appid: 885000, name: "Name In The Catalog" }, { appid: 5219700, parent: 3456660, cover: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/5219700/abc123/library_capsule.jpg", header: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/5219700/def456/header.jpg" }] }));
       // Steam serves pictures for every app but the demo, whose own pictures are missing: the full game's stand in.
       if (options?.method === "HEAD") return new Response(null, { status: String(url).includes("/5219700/") ? 404 : 200 });
       sent.push({ url: String(url), body: JSON.parse(options.body) });
@@ -654,6 +654,14 @@ describe("the messages to the developer's private channel", () => {
     await run(post(goodMessage({ appId: 846470, verdict: "fails" })));
     assert.equal(sent.length, 1);
     assert.equal(sent[0].body.embeds[0].fields.find((f) => f.name === "Player").value, rowsOf(db)[0].voter);
+  });
+
+  it("names a game from the catalog when Steam's store has nothing for it, as the console does, and keeps the number for a game nobody knows", async () => {
+    assert.equal((await run(post(goodMessage({ appId: 885000, verdict: "works" })))).status, 204);
+    assert.match(sent.at(-1).body.embeds[0].title, /^New vote: Name In The Catalog$/);
+    sent.length = 0;
+    assert.equal((await run(post(goodMessage({ appId: 2091960, verdict: "works" })))).status, 204);
+    assert.match(sent.at(-1).body.embeds[0].title, /^New vote: App 2091960$/);
   });
 
   it("does not tell a vote of the test set, and the player's answer is the same without a channel", async () => {
