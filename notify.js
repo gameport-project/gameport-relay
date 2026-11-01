@@ -124,14 +124,16 @@ const webhookOf = (env, environment) => (environment === "test" ? env.DISCORD_TE
 /** What the console shows to open a game in a set: production has its own address. */
 const consoleGame = (origin, appId, environment) => `${origin}/console/${environment === "test" ? "test" : "prod"}/${appId}`;
 
-async function send(webhook, embed) {
+// [content] is plain text, no markdown links: Discord's mobile push preview is built from it when present, and from the
+// embed's title/description (unparsed) otherwise, which showed up as raw "[Steam](https://...)" text in notifications.
+async function send(webhook, embed, content) {
   if (!WEBHOOK.test(webhook ?? "")) return;
   try {
     await fetch(webhook, {
       method: "POST",
       headers: { "content-type": "application/json" },
       // No mention is ever parsed from a name or a version: only the developer's own notification settings decide.
-      body: JSON.stringify({ username: "GamePort relay", embeds: [embed], allowed_mentions: { parse: [] } }),
+      body: JSON.stringify({ username: "GamePort relay", content, embeds: [embed], allowed_mentions: { parse: [] } }),
       signal: AbortSignal.timeout(5000),
     });
   } catch {
@@ -169,7 +171,7 @@ export function notifyVote(env, ctx, origin, vote, environment = "prod", player 
         ...(vote.game ? [field("Game build", vote.game)] : []),
         ...(vote.issues?.length ? [field("Problems", vote.issues.map((code) => `• ${ISSUE_WORDS[code] ?? code}`).join("\n"), false)] : []),
       ],
-    });
+    }, `${answer.text} · ${DEVICES[vote.device] ?? vote.device} · ${name}`);
   })());
 }
 
@@ -196,6 +198,6 @@ export function notifyReport(env, ctx, origin, report, verdict, environment = "p
         field("App", report.appId),
         ...who.fields,
       ],
-    });
+    }, `New report${answer ? " (" + answer.text + ")" : ""} · ${DEVICES[report.device] ?? report.device} · ${name}`);
   })());
 }
