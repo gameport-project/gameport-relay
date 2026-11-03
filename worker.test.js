@@ -640,6 +640,22 @@ describe("the messages to the developer's private channel", () => {
     assert.ok(!JSON.stringify(sent).includes(VOTER));
   });
 
+  it("tells a report with the answer the app gives with it, not the one stored before it", async () => {
+    await run(post(goodMessage({ appId: 846470, verdict: "works", device: "pico" })));
+    sent.length = 0;
+    await run(report({ answer: "fails" }));
+    assert.match(sent[0].body.embeds[0].title, /New report/);
+    assert.match(sent[0].body.content ?? sent[0].body.embeds[0].title, /Does not work/);
+    assert.equal(sent[0].body.embeds[0].fields.find((f) => f.name === "Player's answer").value, "Does not work");
+    // Without it, or with a word that is not an answer, the stored one is told, and the report is never refused for it.
+    sent.length = 0;
+    assert.equal((await run(report())).status, 204);
+    assert.equal(sent[0].body.embeds[0].fields.find((f) => f.name === "Player's answer").value, "Works");
+    sent.length = 0;
+    assert.equal((await run(report({ answer: "maybe" }))).status, 204);
+    assert.equal(sent[0].body.embeds[0].fields.find((f) => f.name === "Player's answer").value, "Works");
+  });
+
   it("names a player of the test set from the test names only, and still tells the code when the table of names is not there yet", async () => {
     const TEST_HOOK = "https://discord.com/api/webhooks/987654321/test-token_XYZ";
     env.DISCORD_TEST_WEBHOOK = TEST_HOOK;

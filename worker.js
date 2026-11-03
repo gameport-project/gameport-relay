@@ -81,7 +81,9 @@ export function validateReportMeta(params) {
   if (!DEVICES.has(device)) return { error: "bad device" };
   const voter = params.get("voter");
   if (typeof voter !== "string" || !/^[0-9a-f]{32}$/.test(voter)) return { error: "bad voter" };
-  return { meta: { appId, app, device, voter } };
+  // The answer the player gave with this report, when the app says it: the answer itself reaches the relay just after the report, so the report cannot read it from the votes yet. Never a reason to refuse the report.
+  const answer = params.get("answer");
+  return { meta: { appId, app, device, voter, ...(VERDICTS.has(answer) ? { answer } : {}) } };
 }
 
 /** A zip starts with "PK\x03\x04": anything else is not a report. */
@@ -281,7 +283,8 @@ async function report(request, env, table, ctx) {
     let id = 0;
     try {
       const [own] = (await env.DB.prepare(`SELECT verdict FROM ${votes} WHERE app_id = ? AND voter = ?`).bind(meta.appId, voter).all()).results;
-      answer = own ? own.verdict : null;
+      // What the app says goes first: the vote of the same player that is stored may be the one before this answer.
+      answer = meta.answer ?? (own ? own.verdict : null);
       const [saved] = (await env.DB.prepare(`SELECT id FROM ${table} WHERE app_id = ? AND voter = ?`).bind(meta.appId, voter).all()).results;
       id = saved ? saved.id : 0;
     } catch {
