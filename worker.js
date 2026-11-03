@@ -7,6 +7,7 @@ import { handleConsole } from "./console.js";
 import { deviceLabel } from "./device_names.js";
 import { ISSUES, ISSUE_SET } from "./issues.js";
 import { notifyReport, notifyVote } from "./notify.js";
+import { compareVersions, fixedSince, parseVersion, turnsOf } from "./turns.js";
 
 // "offline_only": the game works, but only without the network (its online or multiplayer part does not).
 const VERDICTS = new Set(["works", "offline_only", "fails"]);
@@ -131,6 +132,8 @@ const ROUTES = {
   "/incompatible": { table: "incompatible", reasons: "incompatible_reasons", list: true },
   "/test/incompatible": { table: "incompatible_test", reasons: "incompatible_reasons_test", list: true },
 };
+// The reports of one game, listed for its details: the route says which table (the real votes or the test ones).
+const GAME_REPORTS = { "/reports": "votes", "/test/reports": "votes_test" };
 // What only the developer reads: the list of reports and each report. The route says which table (the real one or the test one).
 const ADMIN = { "/admin/reports": "reports", "/admin/test/reports": "reports_test" };
 
@@ -138,9 +141,39 @@ const ADMIN = { "/admin/reports": "reports", "/admin/test/reports": "reports_tes
 const upsert = (table, level = 3) => `INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated, voted_at${level >= 1 ? ", issues" : ""}${level >= 2 ? ", model, codename" : ""}${level >= 3 ? ", report_state" : ""}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?${level >= 1 ? ", ?" : ""}${level >= 2 ? ", ?, ?" : ""}${level >= 3 ? ", ?" : ""})
   ON CONFLICT (app_id, voter) DO UPDATE SET verdict = excluded.verdict, app = excluded.app, game = excluded.game, device = excluded.device, offline = excluded.offline, updated = excluded.updated, voted_at = excluded.voted_at${level >= 1 ? ", issues = excluded.issues" : ""}${level >= 2 ? ", model = excluded.model, codename = excluded.codename" : ""}${level >= 3 ? ", report_state = excluded.report_state" : ""}, fixed = NULL, fixed_in = NULL`;
 
+// Where each set of votes is written: every answer is a line of its history; what is read is the view of the same name as the set (the last line of each player and game).
+export const HISTORY = { votes: "vote_history", votes_test: "vote_history_test" };
+
+/**
+ * Records an answer in the history of the player for the game: a new line when the answer, the version of GamePort or the build of the game is not what the last line says, else the
+ * last line is renewed (a game that does not work is asked about again every day, and the same answer again is not a new fact). A renewed answer counts again, as before: it is no
+ * longer marked as fixed. Returns false when the database has no history yet (migration 0019): the answer is then saved the old way.
+ */
+async function recordVote(env, table, values, issues, checked) {
+  const history = HISTORY[table];
+  const [appId, voter, verdict, app, game, device, offline, today, hour] = values;
+  const more = [issues, checked.model ?? null, checked.codename ?? null, checked.report ?? null];
+  try {
+    const [last] = (await env.DB.prepare(`SELECT id, verdict, app, game FROM ${history} WHERE app_id = ? AND voter = ? ORDER BY id DESC LIMIT 1`).bind(appId, voter).all()).results;
+    if (last && last.verdict === verdict && last.app === app && (last.game ?? null) === game) {
+      await env.DB.prepare(`UPDATE ${history} SET device = ?, offline = ?, updated = ?, voted_at = ?, issues = ?, model = ?, codename = ?, report_state = ?, fixed = NULL, fixed_in = NULL WHERE id = ?`)
+        .bind(device, offline, today, hour, ...more, last.id).run();
+    } else {
+      await env.DB.prepare(`INSERT INTO ${history} (app_id, voter, verdict, app, game, device, offline, updated, voted_at, issues, model, codename, report_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(appId, voter, verdict, app, game, device, offline, today, hour, ...more).run();
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** The relay's own clock, UTC, rounded down to the hour: the app never sends a time, and none of a player's is used. */
 export const thisHour = (now = new Date()) => `${now.toISOString().slice(0, 13)}:00:00Z`;
 // A vote marked as fixed counts as "works": the problem it reported was solved, whatever it said.
+/** How many lines of reports (model, answer, version of GamePort) the summary gives for one game. */
+const REPORT_LINES = 24;
+
 const summaryQuery = (table) => `SELECT app_id AS appId, device, SUM(verdict = 'works') AS works, SUM(verdict = 'offline_only') AS offlineOnly, SUM(verdict = 'fails') AS fails, SUM(verdict = 'works' AND offline = 1) AS worksOffline FROM (SELECT app_id, device, offline, CASE WHEN fixed IS NULL THEN verdict ELSE 'works' END AS verdict FROM ${table}) GROUP BY app_id, device ORDER BY app_id, device`;
 
 function reply(status, body, headers = {}) {
@@ -175,8 +208,8 @@ async function vote(request, env, table, ctx) {
     [1, [...values, issues]],
     [0, values],
   ];
-  let saved = false;
-  for (const [level, args] of attempts) {
+  let saved = await recordVote(env, table, values, issues, checked);
+  for (const [level, args] of saved ? [] : attempts) {
     try {
       await env.DB.prepare(upsert(table, level)).bind(...args).run();
       saved = true;
@@ -344,6 +377,18 @@ async function summary(env, table) {
       if (ISSUE_SET.has(code)) model.issues = { ...model.issues, [code]: (model.issues?.[code] ?? 0) + 1 };
     }
   }
+  // From which version a game works after it did not, which version still works and from which it broke, for each kind of device: read in the history of the answers (nothing
+  // before migration 0019). Only versions, nothing about any player.
+  try {
+    const found = await readTurns(env, table, null);
+    for (const [appId, turns] of found) {
+      const game = byGame.get(appId);
+      if (!game) continue;
+      for (const [device, turn] of Object.entries(turns)) if (game.devices[device]) game.devices[device].turn = turn;
+    }
+  } catch {
+    // No history yet.
+  }
   // The day a problem was solved, and in which version when it is known: shown on the site, and counted as "works" above.
   for (const fix of fixes) {
     const game = byGame.get(fix.appId);
@@ -351,6 +396,76 @@ async function summary(env, table) {
     (game.fixes ??= []).push(fix.version ? { device: fix.device, day: fix.day, version: fix.version } : { device: fix.device, day: fix.day });
   }
   return reply(200, { v: 1, games: [...byGame.values()] }, { "cache-control": "public, max-age=300" });
+}
+
+/** The turns (see turns.js) of one game, or of every game when [appId] is null, from the history of the answers of the set. */
+export async function readTurns(env, table, appId) {
+  const history = HISTORY[table];
+  const only = appId === null ? "" : " AND h.app_id = ?";
+  const bind = (statement) => (appId === null ? statement : statement.bind(appId));
+  const lines = (await bind(env.DB.prepare(
+    `SELECT h.app_id AS appId, h.voter, h.device, h.verdict, h.app FROM ${history} h WHERE EXISTS (SELECT 1 FROM ${history} o WHERE o.app_id = h.app_id AND o.voter = h.voter AND o.id <> h.id)${only} ORDER BY h.app_id, h.voter, h.id`,
+  )).all()).results;
+  const last = (await bind(env.DB.prepare(
+    `SELECT h.app_id AS appId, h.voter, h.device, CASE WHEN h.fixed IS NULL THEN h.verdict ELSE 'works' END AS verdict, h.app FROM ${table} h WHERE 1 = 1${only}`,
+  )).all()).results;
+  return turnsOf(lines, last);
+}
+
+/**
+ * What the details of one game list: one line for each model, answer and version of GamePort, with how many players said it (a fixed vote counts as "works"), what the players of
+ * a line ticked as going wrong, and, for a line that does not work, the version from which it may be solved (the turn of its kind of device). The newest version first, then the most
+ * said, and a game keeps at most REPORT_LINES of them. A vote added by hand in the console has no version. Without the model column (before migration 0013) the model is left out
+ * and the lines are only by kind of device. Asked for one game only when its details are opened, so the summary every app reads stays small. Nothing about any player.
+ */
+async function gameReports(env, table, appId) {
+  let rows;
+  try {
+    rows = (await env.DB.prepare(`SELECT device, COALESCE(model, '') AS model, app AS version, CASE WHEN fixed IS NULL THEN verdict ELSE 'works' END AS verdict, CASE WHEN fixed IS NULL THEN issues END AS issues FROM ${table} WHERE app_id = ?`).bind(appId).all()).results;
+  } catch {
+    try {
+      rows = (await env.DB.prepare(`SELECT device, '' AS model, app AS version, CASE WHEN fixed IS NULL THEN verdict ELSE 'works' END AS verdict, CASE WHEN fixed IS NULL THEN issues END AS issues FROM ${table} WHERE app_id = ?`).bind(appId).all()).results;
+    } catch {
+      try {
+        rows = (await env.DB.prepare(`SELECT device, '' AS model, app AS version, CASE WHEN fixed IS NULL THEN verdict ELSE 'works' END AS verdict, NULL AS issues FROM ${table} WHERE app_id = ?`).bind(appId).all()).results;
+      } catch {
+        return reply(500, { error: "not read" });
+      }
+    }
+  }
+  let turns = {};
+  try {
+    turns = (await readTurns(env, table, appId)).get(appId) ?? {};
+  } catch {
+    // No history yet.
+  }
+  const grouped = new Map();
+  for (const row of rows) {
+    const key = [row.device, row.model, row.version, row.verdict].join("\u0000");
+    const line = grouped.get(key) ?? { device: row.device, model: row.model, version: row.version, verdict: row.verdict, n: 0, issues: {} };
+    line.n += 1;
+    for (const code of String(row.issues ?? "").split(",")) if (ISSUE_SET.has(code)) line.issues[code] = (line.issues[code] ?? 0) + 1;
+    grouped.set(key, line);
+  }
+  const reports = [...grouped.values()]
+    // The newest version first (a line without a version, or with one that is not one, last), then the most said.
+    .sort((a, b) => Number(Boolean(parseVersion(b.version))) - Number(Boolean(parseVersion(a.version))) || (compareVersions(b.version, a.version) ?? 0) || b.n - a.n || a.device.localeCompare(b.device) || a.model.localeCompare(b.model))
+    .slice(0, REPORT_LINES)
+    .map((line) => {
+      const name = line.model ? deviceLabel(line.model, null) : null;
+      const since = fixedSince(line, turns);
+      return {
+        device: line.device,
+        ...(line.model ? { model: line.model } : {}),
+        ...(name ? { name } : {}),
+        verdict: line.verdict,
+        ...(line.version && line.version !== "admin" ? { version: line.version } : {}),
+        n: line.n,
+        ...(Object.keys(line.issues).length ? { issues: line.issues } : {}),
+        ...(since ? { fixedSince: since } : {}),
+      };
+    });
+  return reply(200, { v: 1, appId, reports, ...(Object.keys(turns).length ? { turns } : {}) }, { "cache-control": "public, max-age=300" });
 }
 
 /** The games confirmed as incompatible, and the reasons they name (title and explanation in each language). Nothing about any player. */
@@ -389,6 +504,14 @@ export default {
     // The developer's console answers its own routes (see console.js); to everyone else they do not exist.
     const consoleAnswer = await handleConsole(request, env, ctx);
     if (consoleAnswer) return consoleAnswer;
+    // The reports of one game, for its details: /reports/<appId> (the real votes) or /test/reports/<appId> (the test ones).
+    const reportsRoute = Object.keys(GAME_REPORTS).find((base) => path.startsWith(`${base}/`));
+    if (reportsRoute) {
+      const appId = path.slice(reportsRoute.length + 1);
+      if (!/^\d{1,9}$/.test(appId)) return reply(404, { error: "not found" });
+      if (!env.DB) return reply(500, { error: "relay not configured" });
+      return request.method === "GET" ? gameReports(env, GAME_REPORTS[reportsRoute], Number(appId)) : reply(405, { error: "use GET" });
+    }
     const developerRoute = Object.keys(ADMIN).find((base) => path === base || path.startsWith(`${base}/`));
     if (developerRoute) {
       if (!env.DB) return reply(500, { error: "relay not configured" });

@@ -1,3 +1,4 @@
+import { legacySchema } from "./test_support.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -68,7 +69,7 @@ const ask = async (path, { method = "GET", body, jwt, headers = {}, page = true,
   return worker.fetch(new Request(`${ORIGIN}${path}`, { method, headers: all, body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body) }), env);
 };
 
-const vote = (appId, voter, extra = {}) => db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+const vote = (appId, voter, extra = {}) => db.prepare("INSERT INTO vote_history (app_id, voter, verdict, app, game, device, offline, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
   .run(appId, voter, extra.verdict ?? "fails", extra.app ?? "0.7.2", null, extra.device ?? "quest", extra.offline ? 1 : 0, "2026-10-08");
 const summary = async (path = "/summary") => (await (await worker.fetch(new Request(`${ORIGIN}${path}`), env)).json()).games;
 
@@ -196,7 +197,7 @@ describe("reading the votes", () => {
   it("lists the votes of a game in the real set or the test set, and nothing from another game", async () => {
     vote(5, "aaaaaaaaaaaa");
     vote(6, "bbbbbbbbbbbb");
-    db.prepare("INSERT INTO votes_test (app_id, voter, verdict, app, game, device, offline, updated) VALUES (5, 'cccccccccccc', 'works', '0.7.2', NULL, 'pico', 1, '2026-10-09')").run();
+    db.prepare("INSERT INTO vote_history_test (app_id, voter, verdict, app, game, device, offline, updated) VALUES (5, 'cccccccccccc', 'works', '0.7.2', NULL, 'pico', 1, '2026-10-09')").run();
     const real = await (await ask("/console/api/votes?env=prod&appId=5")).json();
     assert.deepEqual(real.votes.map((v) => v.voter), ["aaaaaaaaaaaa"]);
     const test = await (await ask("/console/api/votes?env=test&appId=5")).json();
@@ -336,7 +337,7 @@ describe("changing any vote", () => {
 
   it("keeps the first day it was marked, even when it is marked again", async () => {
     vote(5, "aaaaaaaaaaaa");
-    db.prepare("UPDATE votes SET fixed = '2026-01-02' WHERE voter = 'aaaaaaaaaaaa'").run();
+    db.prepare("UPDATE vote_history SET fixed = '2026-01-02' WHERE voter = 'aaaaaaaaaaaa'").run();
     await ask("/console/api/change", { method: "POST", body: { env: "prod", appId: 5, voter: "aaaaaaaaaaaa", fixed: true } });
     assert.equal(rows()[0].fixed, "2026-01-02");
   });
@@ -377,7 +378,7 @@ describe("changing any vote", () => {
 
   it("changes only the set that was asked", async () => {
     vote(5, "aaaaaaaaaaaa", { verdict: "fails" });
-    db.prepare("INSERT INTO votes_test (app_id, voter, verdict, app, game, device, offline, updated) VALUES (5, 'aaaaaaaaaaaa', 'fails', '0.7.2', NULL, 'quest', 0, '2026-10-08')").run();
+    db.prepare("INSERT INTO vote_history_test (app_id, voter, verdict, app, game, device, offline, updated) VALUES (5, 'aaaaaaaaaaaa', 'fails', '0.7.2', NULL, 'quest', 0, '2026-10-08')").run();
     await ask("/console/api/change", { method: "POST", body: { env: "test", appId: 5, voter: "aaaaaaaaaaaa", verdict: "works" } });
     assert.equal(rows("votes_test")[0].verdict, "works");
     assert.equal(rows()[0].verdict, "fails");
@@ -442,8 +443,8 @@ describe("the reports", () => {
   it("tells the device behind a report from the vote of the same player, with its name, or the raw code when the name is not known", async () => {
     vote(5, "aaaaaaaaaaaa");
     vote(5, "bbbbbbbbbbbb");
-    db.prepare("UPDATE votes SET model = 'Quest 3', codename = 'eureka' WHERE voter = 'aaaaaaaaaaaa'").run();
-    db.prepare("UPDATE votes SET model = 'ZZ-NOT-A-DEVICE' WHERE voter = 'bbbbbbbbbbbb'").run();
+    db.prepare("UPDATE vote_history SET model = 'Quest 3', codename = 'eureka' WHERE voter = 'aaaaaaaaaaaa'").run();
+    db.prepare("UPDATE vote_history SET model = 'ZZ-NOT-A-DEVICE' WHERE voter = 'bbbbbbbbbbbb'").run();
     report("reports", 5, "aaaaaaaaaaaa", "2026-10-08");
     report("reports", 5, "bbbbbbbbbbbb", "2026-10-09");
     report("reports", 5, "cccccccccccc", "2026-10-10");
@@ -516,7 +517,7 @@ describe("the reports", () => {
 describe("the state of the report in the console", () => {
   it("gives the state of the report with each vote, and on the page of the player", async () => {
     vote(5, "aaaaaaaaaaaa");
-    db.prepare("UPDATE votes SET report_state = 'waiting' WHERE voter = 'aaaaaaaaaaaa'").run();
+    db.prepare("UPDATE vote_history SET report_state = 'waiting' WHERE voter = 'aaaaaaaaaaaa'").run();
     vote(5, "bbbbbbbbbbbb");
     const votes = (await (await ask("/console/api/votes?env=prod&appId=5")).json()).votes;
     assert.deepEqual(Object.fromEntries(votes.map((v) => [v.voter, v.reportState])), { aaaaaaaaaaaa: "waiting", bbbbbbbbbbbb: null });
@@ -598,7 +599,7 @@ describe("the players", () => {
     vote(5, "aaaaaaaaaaaa", { device: "pico" });
     vote(6, "aaaaaaaaaaaa", { verdict: "works", device: "pico" });
     vote(5, "bbbbbbbbbbbb");
-    db.prepare("UPDATE votes SET model = 'A92Y0', codename = 'sparrow' WHERE voter = 'aaaaaaaaaaaa'").run();
+    db.prepare("UPDATE vote_history SET model = 'A92Y0', codename = 'sparrow' WHERE voter = 'aaaaaaaaaaaa'").run();
     report("reports", 5, "aaaaaaaaaaaa", "2026-10-09");
     report("reports", 5, "bbbbbbbbbbbb", "2026-10-09");
     const answer = await (await ask("/console/api/player?env=prod&voter=aaaaaaaaaaaa")).json();
@@ -751,8 +752,9 @@ describe("the reports that wait, and the answer each goes with", () => {
   const ZIP = Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]);
   const report = (table, appId, voter, day, handled = null) =>
     db.prepare(`INSERT INTO ${table} (app_id, voter, app, device, size, data, updated, handled) VALUES (?, ?, '0.8.1', 'quest', ?, ?, ?, ?)`).run(appId, voter, ZIP.length, ZIP.toString("base64"), day, handled);
+  // The answers are written to the history of the set (what the console reads as "votes" is the view of its last lines).
   const vote = (table, appId, voter, verdict, offline = 0) =>
-    db.prepare(`INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated) VALUES (?, ?, ?, '0.8.1', NULL, 'quest', ?, '2026-10-12')`).run(appId, voter, verdict, offline);
+    db.prepare(`INSERT INTO ${{ votes: "vote_history", votes_test: "vote_history_test" }[table]} (app_id, voter, verdict, app, game, device, offline, updated) VALUES (?, ?, ?, '0.8.1', NULL, 'quest', ?, '2026-10-12')`).run(appId, voter, verdict, offline);
   const list = async (query = "env=prod") => (await ask(`/console/api/reports?${query}`)).json();
 
   it("tells for each report what the same player answered for that game, and null when there is no vote", async () => {
@@ -929,7 +931,7 @@ describe("what is new", () => {
   const news = async (environment = "prod") => (await ask(`/console/api/news?env=${environment}`)).json();
   const seen = (what, environment = "prod") => ask("/console/api/seen", { method: "POST", body: { env: environment, what } });
   const hour = (offset = 0) => `${new Date(Date.now() + offset * 3600_000).toISOString().slice(0, 13)}:00:00Z`;
-  const stamped = (appId, voter, votedAt, updated, verdict = "fails") => db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated, voted_at) VALUES (?, ?, ?, '0.7.2', NULL, 'quest', 0, ?, ?)")
+  const stamped = (appId, voter, votedAt, updated, verdict = "fails") => db.prepare("INSERT INTO vote_history (app_id, voter, verdict, app, game, device, offline, updated, voted_at) VALUES (?, ?, ?, '0.7.2', NULL, 'quest', 0, ?, ?)")
     .run(appId, voter, verdict, updated, votedAt);
 
   it("is stamped by the relay's clock when a player votes, rounded down to the hour, whatever the app sends", async () => {
@@ -969,7 +971,7 @@ describe("what is new", () => {
     await news();
     await news("test");
     stamped(5, "aaaaaaaaaaaa", hour(1), "2026-10-13");
-    db.prepare("INSERT INTO votes_test (app_id, voter, verdict, app, game, device, offline, updated, voted_at) VALUES (5, 'bbbbbbbbbbbb', 'works', '0.7.2', NULL, 'quest', 0, '2026-10-13', ?)").run(hour(1));
+    db.prepare("INSERT INTO vote_history_test (app_id, voter, verdict, app, game, device, offline, updated, voted_at) VALUES (5, 'bbbbbbbbbbbb', 'works', '0.7.2', NULL, 'quest', 0, '2026-10-13', ?)").run(hour(1));
     assert.equal((await news()).votes.count, 1);
     assert.equal((await news("test")).votes.count, 1);
     db.prepare("UPDATE console_seen SET at = '2000-01-01' WHERE name = 'games'").run();
@@ -993,10 +995,68 @@ describe("what is new", () => {
 
   it("adds the column and the table to a database made before them, and keeps its votes", () => {
     const old = new DatabaseSync(":memory:");
-    old.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*voted_at +TEXT.*\n/gm, "").replace(/CREATE TABLE IF NOT EXISTS console_seen[\s\S]*?\);/, ""));
+    old.exec(legacySchema.replaceAll(/^\s*voted_at +TEXT.*\n/gm, "").replace(/CREATE TABLE IF NOT EXISTS console_seen[\s\S]*?\);/, ""));
     old.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (1, 'aaaaaaaaaaaa', 'works', '0.7.2', NULL, 'quest', 0, '2026-10-08')").run();
     old.exec(readFileSync(new URL("./migrations/0009_voted_at.sql", import.meta.url), "utf8"));
     assert.deepEqual({ ...old.prepare("SELECT app_id, voter, voted_at FROM votes").get() }, { app_id: 1, voter: "aaaaaaaaaaaa", voted_at: null });
     assert.equal(old.prepare("SELECT COUNT(*) AS n FROM console_seen").get().n, 0);
+  });
+});
+
+describe("the console and the history of the answers", () => {
+  it("changes the last answer of the player and leaves the ones before it as they were", async () => {
+    vote(5, "aaaaaaaaaaaa", { verdict: "fails", app: "0.8.2" });
+    vote(5, "aaaaaaaaaaaa", { verdict: "works", app: "0.9.0" });
+    await ask("/console/api/change", { method: "POST", body: { env: "prod", appId: 5, voter: "aaaaaaaaaaaa", verdict: "fails", device: "pico" } });
+    assert.deepEqual(db.prepare("SELECT verdict, device, app FROM vote_history ORDER BY id").all().map((row) => ({ ...row })), [
+      { verdict: "fails", device: "quest", app: "0.8.2" },
+      { verdict: "fails", device: "pico", app: "0.9.0" },
+    ]);
+  });
+
+  it("removes every answer of the player for the game, and no other", async () => {
+    vote(5, "aaaaaaaaaaaa", { verdict: "fails", app: "0.8.2" });
+    vote(5, "aaaaaaaaaaaa", { verdict: "works", app: "0.9.0" });
+    vote(5, "bbbbbbbbbbbb", { verdict: "works" });
+    vote(6, "aaaaaaaaaaaa", { verdict: "works" });
+    const response = await ask("/console/api/remove", { method: "POST", body: { env: "prod", appId: 5, voter: "aaaaaaaaaaaa" } });
+    assert.equal(response.status, 200);
+    assert.deepEqual(db.prepare("SELECT app_id, voter FROM vote_history ORDER BY id").all().map((row) => [row.app_id, row.voter]), [[5, "bbbbbbbbbbbb"], [6, "aaaaaaaaaaaa"]]);
+  });
+
+  it("adds a vote as a line of the history", async () => {
+    const response = await ask("/console/api/add", { method: "POST", body: { env: "test", appId: 5, verdict: "works", device: "quest" } });
+    assert.equal(response.status, 200);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM vote_history_test").get().n, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM vote_history").get().n, 0);
+  });
+});
+
+describe("the trail of a player in the console", () => {
+  it("gives every answer of a player who answered more than once, oldest first, and the turn of the game", async () => {
+    vote(5, "aaaaaaaaaaaa", { verdict: "fails", app: "0.8.2" });
+    vote(5, "aaaaaaaaaaaa", { verdict: "works", app: "0.9.0" });
+    vote(5, "aaaaaaaaaaaa", { verdict: "works", app: "0.9.3" });
+    vote(5, "bbbbbbbbbbbb", { verdict: "works", app: "0.9.1" });
+    const data = await (await ask("/console/api/votes?env=prod&appId=5")).json();
+    const first = data.votes.find((v) => v.voter === "aaaaaaaaaaaa");
+    assert.deepEqual(first.trail.map((line) => [line.verdict, line.app]), [["fails", "0.8.2"], ["works", "0.9.0"], ["works", "0.9.3"]]);
+    // A player who answered once has no trail, and nothing about another player leaks into it.
+    assert.equal("trail" in data.votes.find((v) => v.voter === "bbbbbbbbbbbb"), false);
+    assert.equal(JSON.stringify(first.trail).includes("bbbbbbbbbbbb"), false);
+    assert.equal(data.synth.moved, 1);
+    assert.deepEqual(data.synth.turns.quest, { fixedIn: "0.9.0", failedIn: "0.8.2", stillIn: "0.9.3" });
+  });
+});
+
+describe("the hour of an answer in the console", () => {
+  it("gives the hour an answer arrived (UTC, rounded down), for the answer and for each line of its trail", async () => {
+    await ask("/console/api/add", { method: "POST", body: { env: "prod", appId: 5, verdict: "works", device: "quest" } });
+    const voter = db.prepare("SELECT voter FROM vote_history").get().voter;
+    db.prepare("INSERT INTO vote_history (app_id, voter, verdict, app, game, device, offline, updated, voted_at) VALUES (5, ?, 'fails', '0.9.3', NULL, 'quest', 0, '2026-11-03', '2026-11-03T21:00:00Z')").run(voter);
+    const [row] = (await (await ask("/console/api/votes?env=prod&appId=5")).json()).votes;
+    assert.equal(row.votedAt, "2026-11-03T21:00:00Z");
+    assert.match(row.trail[0].votedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:00:00Z$/);
+    assert.equal(row.trail[1].votedAt, "2026-11-03T21:00:00Z");
   });
 });

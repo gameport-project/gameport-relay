@@ -93,6 +93,11 @@ details.incompat[open] > summary { border-bottom:1px dashed var(--line); }
 details.incompat > .add { border:0; margin:0; }
 details.incompat.is-incompatible > summary { color:#ff9a9a; }
 .votes { display:flex; flex-direction:column; gap:10px; }
+.synth { margin:0 0 10px; font-size:13px; opacity:.85; }
+.trail { margin-top:4px; font-size:12px; }
+.trail summary { cursor:pointer; opacity:.85; }
+.trail-line { margin:2px 0 0 14px; opacity:.8; }
+.t-works { color:#4cc38a; } .t-offline_only { color:#f0b24a; } .t-fails { color:#ef6b6b; }
 .vote { display:grid; grid-template-columns:1fr auto; gap:8px 16px; align-items:center; padding:12px 16px; border-radius:12px; background:rgba(255,255,255,.04); border:1px solid var(--line); border-left:4px solid transparent; }
 .vote.v-works { border-left-color:#4cc38a; } .vote.v-offline_only { border-left-color:#f0b24a; } .vote.v-fails { border-left-color:#ef6b6b; }
 .vote-main { display:flex; flex-direction:column; gap:8px; min-width:0; }
@@ -564,6 +569,7 @@ function drawGames() {
 function loadVotes() {
   call("/console/api/votes?env=" + state.env + "&appId=" + state.current.appid).then(function (data) {
     state.votes = data.votes;
+    state.synth = data.synth;
     drawDetail();
   }).catch(function (e) { toast(e.message, true); });
 }
@@ -1017,6 +1023,7 @@ function drawDetail() {
   }).catch(function () {});
   var shown = state.votes.filter(function (v) { return state.device === "all" || v.device === state.device; });
   if (!shown.length) { panel.appendChild(el("p", { class: "muted", text: state.votes.length ? "No vote for this game on this device." : "No vote for this game." })); panel.appendChild(reports); return; }
+  panel.appendChild(synthLine());
   var list = el("div", { class: "votes" });
   shown.forEach(function (v) { list.appendChild(row(v)); });
   panel.appendChild(list);
@@ -1042,6 +1049,13 @@ function formatDay(day) {
   if (!m) return day || "";
   var date = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
   return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+/** When a vote arrived: the day and the hour (the relay keeps no finer time than the hour, UTC) in the time of whoever reads the console; the day alone for a vote from before it kept the hour. */
+function whenText(v) {
+  var at = v.votedAt ? new Date(v.votedAt) : null;
+  if (at && !isNaN(at.getTime())) return at.toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit" });
+  return v.updated ? formatDay(v.updated) : "";
 }
 
 /** The problems as small red pills, each with its count when there is one. [counts] is a list of [code, count] or of codes. */
@@ -1110,12 +1124,13 @@ function row(v) {
   // The title is what the device is: its name when the list knows it, the kind of device otherwise, the model and the codename in its tooltip.
   var title = v.deviceName || (v.model ? v.model : v.device);
   // What the title already says is not repeated: with a name, neither the kind of device nor the model; with a raw model as the title, the kind of device only.
-  var details = [v.deviceName || title === v.device ? null : v.device, v.updated ? formatDay(v.updated) : null, v.voter, v.offline ? "worked offline" : null, state2 || null].filter(Boolean);
+  var details = [v.deviceName || title === v.device ? null : v.device, whenText(v) || null, v.voter, v.offline ? "worked offline" : null, state2 || null].filter(Boolean);
   return el("div", { class: "vote v-" + answer, title: VERDICTS[answer] }, [
     el("div", { class: "vote-main" }, [
       el("div", { class: "vote-title" }, [el("strong", { text: title, title: [v.model, v.codename].filter(Boolean).join(" / ") }), el("span", { class: "ver", title: "Version of GamePort that sent this vote", text: "- " + v.app })]),
       codes.length ? issuePills(codes) : document.createTextNode(""),
       v.reportState ? el("div", { class: "report-state" }, [reportPill(v.reportState)]) : document.createTextNode(""),
+      v.trail ? trailLine(v) : document.createTextNode(""),
       el("div", { class: "vote-meta" }, details.map(function (piece, i) {
         var part = piece === v.voter ? el("span", {}, [playerLink(v.voter, v.label), document.createTextNode(v.app === "admin" ? " (admin)" : "")]) : document.createTextNode(piece);
         return i ? el("span", {}, [document.createTextNode(" \u00b7 "), part]) : part;
@@ -1124,6 +1139,36 @@ function row(v) {
     el("div", { class: "actions" }, [fixedBtn, edit, more]),
     editor,
   ]);
+}
+
+/** The answers of a player for the game, oldest first, as marks and versions of GamePort (✗ 0.8.2 → ✓ 0.9.0 → ✓ 0.9.3); opened, each one with its day. */
+var MARKS = { works: "✓", offline_only: "≈", fails: "✗" };
+function trailLine(v) {
+  var box = el("details", { class: "trail" });
+  var words = v.trail.map(function (t) { return (MARKS[t.verdict] || "?") + " " + t.app; }).join(" → ");
+  box.appendChild(el("summary", { text: words, title: "Every answer of this player for the game" }));
+  v.trail.forEach(function (t) {
+    var ticked = t.issues ? " · " + t.issues.split(",").map(function (c) { return ISSUE_LABELS[c] || c; }).join(", ") : "";
+    box.appendChild(el("div", { class: "trail-line t-" + t.verdict, text: whenText(t) + " · " + (MARKS[t.verdict] || "?") + " " + VERDICTS[t.verdict] + " · GamePort " + t.app + (t.game ? " · build " + t.game : "") + ticked }));
+  });
+  return box;
+}
+
+/** What the history says of the game: how many players went from not working to working, and the turns of the kinds of device in view. */
+function synthLine() {
+  var s = state.synth;
+  if (!s) return document.createTextNode("");
+  var parts = [];
+  if (s.moved) parts.push(s.moved + (s.moved === 1 ? " player moved" : " players moved") + " from not working to working");
+  Object.keys(s.turns || {}).forEach(function (d) {
+    if (state.device !== "all" && d !== state.device) return;
+    var t = s.turns[d];
+    var bits = [];
+    if (t.fixedIn) bits.push("fixed in " + t.fixedIn + (t.stillIn ? ", still works in " + t.stillIn : ""));
+    if (t.brokeIn) bits.push("broke in " + t.brokeIn);
+    if (bits.length) parts.push((state.device === "all" ? d + ": " : "") + bits.join(", "));
+  });
+  return parts.length ? el("p", { class: "synth", text: parts.join(" · ") }) : document.createTextNode("");
 }
 
 /** The menu of the status filter: one box per status, any number ticked; the closed box says what is ticked. */

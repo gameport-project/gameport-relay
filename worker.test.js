@@ -1,3 +1,4 @@
+import { legacySchema } from "./test_support.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -163,8 +164,8 @@ describe("the relay", () => {
   });
 
   it("counts as worked offline only a vote that says it worked, even if a row says otherwise", async () => {
-    db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (9, 'aaaaaaaaaaaa', 'fails', '0.7.2', NULL, 'quest', 1, '2026-10-08')").run();
-    db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (9, 'bbbbbbbbbbbb', 'works', '0.7.2', NULL, 'quest', 1, '2026-10-08')").run();
+    db.prepare("INSERT INTO vote_history (app_id, voter, verdict, app, game, device, offline, updated) VALUES (9, 'aaaaaaaaaaaa', 'fails', '0.7.2', NULL, 'quest', 1, '2026-10-08')").run();
+    db.prepare("INSERT INTO vote_history (app_id, voter, verdict, app, game, device, offline, updated) VALUES (9, 'bbbbbbbbbbbb', 'works', '0.7.2', NULL, 'quest', 1, '2026-10-08')").run();
     assert.deepEqual(await (await worker.fetch(get(), env)).json(), { v: 1, games: [{ appId: 9, works: 1, offlineOnly: 0, fails: 1, worksOffline: 1, devices: { quest: { works: 1, offlineOnly: 0, fails: 1, worksOffline: 1 } } }] });
   });
 
@@ -245,8 +246,8 @@ describe("the relay", () => {
   });
 
   it("the database itself refuses a verdict that is not one of the three", () => {
-    assert.throws(() => db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (1, 'x', 'maybe', '0.7.2', NULL, 'quest', 0, '2026-10-08')").run());
-    assert.doesNotThrow(() => db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (1, 'x', 'offline_only', '0.7.2', NULL, 'quest', 0, '2026-10-08')").run());
+    assert.throws(() => db.prepare("INSERT INTO vote_history (app_id, voter, verdict, app, game, device, offline, updated) VALUES (1, 'x', 'maybe', '0.7.2', NULL, 'quest', 0, '2026-10-08')").run());
+    assert.doesNotThrow(() => db.prepare("INSERT INTO vote_history (app_id, voter, verdict, app, game, device, offline, updated) VALUES (1, 'x', 'offline_only', '0.7.2', NULL, 'quest', 0, '2026-10-08')").run());
   });
 
   it("answers 500 without repeating what the database said, when it fails", async () => {
@@ -312,7 +313,7 @@ describe("the test routes", () => {
 describe("the migration of a database made before the offline column", () => {
   it("adds the column to both tables, keeps the votes, and counts them as not offline", async () => {
     const db = new DatabaseSync(":memory:");
-    const old = readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*offline INTEGER.*\n/gm, "").replaceAll(/^\s*fixed(_in)? +TEXT.*\n/gm, "").replaceAll(/^\s*voted_at +TEXT.*\n/gm, "").replaceAll(/^\s*issues +TEXT.*\n/gm, "").replaceAll("'works', 'offline_only', 'fails'", "'works', 'fails'");
+    const old = legacySchema.replaceAll(/^\s*offline INTEGER.*\n/gm, "").replaceAll(/^\s*fixed(_in)? +TEXT.*\n/gm, "").replaceAll(/^\s*voted_at +TEXT.*\n/gm, "").replaceAll(/^\s*issues +TEXT.*\n/gm, "").replaceAll("'works', 'offline_only', 'fails'", "'works', 'fails'");
     assert.ok(!old.includes("offline") && !old.includes("fixed") && !old.includes("voted_at"));
     db.exec(old);
     db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, updated) VALUES (1, 'aaaaaaaaaaaa', 'works', '0.7.2', NULL, 'quest', '2026-10-08')").run();
@@ -330,7 +331,7 @@ describe("the migration that allows the answer offline only", () => {
   it("rebuilds both tables, keeps every vote, and then accepts the new answer and still refuses the others", async () => {
     const db = new DatabaseSync(":memory:");
     // The database as it was after the offline column, before the third answer.
-    const schema = readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*fixed(_in)? +TEXT.*\n/gm, "").replaceAll(/^\s*voted_at +TEXT.*\n/gm, "").replaceAll(/^\s*issues +TEXT.*\n/gm, "").replaceAll("'works', 'offline_only', 'fails'", "'works', 'fails'");
+    const schema = legacySchema.replaceAll(/^\s*fixed(_in)? +TEXT.*\n/gm, "").replaceAll(/^\s*voted_at +TEXT.*\n/gm, "").replaceAll(/^\s*issues +TEXT.*\n/gm, "").replaceAll("'works', 'offline_only', 'fails'", "'works', 'fails'");
     assert.ok(!schema.includes("offline_only") && !schema.includes("fixed") && !schema.includes("voted_at"));
     db.exec(schema);
     db.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (1, 'aaaaaaaaaaaa', 'works', '0.7.2', 'b1', 'quest', 1, '2026-10-08')").run();
@@ -801,13 +802,13 @@ describe("what players tick as going wrong", () => {
     await voteWith(VOTER, { verdict: "fails", issues: ["slow"] });
     await voteWith(VOTER, { verdict: "fails", issues: ["closes"] });
     assert.deepEqual((await summary())[0].issues, { closes: 1 });
-    db.prepare("UPDATE votes SET fixed = '2026-10-26'").run();
+    db.prepare("UPDATE vote_history SET fixed = '2026-10-26'").run();
     assert.equal("issues" in (await summary())[0], false);
   });
 
   it("still saves the vote on a database that has not had the migration yet, without the ticks", async () => {
     const old = new DatabaseSync(":memory:");
-    old.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*issues +TEXT.*\n/gm, ""));
+    old.exec(legacySchema.replaceAll(/^\s*issues +TEXT.*\n/gm, ""));
     assert.ok(!old.prepare("SELECT sql FROM sqlite_master WHERE name = 'votes'").get().sql.includes("issues"));
     const oldEnv = { DB: d1(old), VOTER_SALT: "salt" };
     assert.equal((await worker.fetch(post(goodMessage({ verdict: "fails", issues: ["slow"] })), oldEnv)).status, 204);
@@ -836,8 +837,9 @@ describe("the model and the codename of a device", () => {
     assert.equal("model" in validate(goodMessage()).vote, false);
   });
 
-  const stripped = (...columns) => columns.reduce((sql, column) => sql.replaceAll(new RegExp(`^\\s*${column} +TEXT.*\\n`, "gm"), ""), readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+  const stripped = (...columns) => columns.reduce((sql, column) => sql.replaceAll(new RegExp(`^\\s*${column} +TEXT.*\\n`, "gm"), ""), legacySchema);
   const summaryOf = async (env) => (await (await worker.fetch(get(), env)).json()).games;
+  const reportsOf = async (env, path = "/reports/1125240") => (await (await worker.fetch(get(path), env)).json()).reports;
 
   it("stores them with the vote, replaces them when the player votes again, and the summary counts the models for each kind of device", async () => {
     const db = new DatabaseSync(":memory:");
@@ -866,6 +868,52 @@ describe("the model and the codename of a device", () => {
     await vote(VOTER, { verdict: "works", device: "pico", model: "A8210" });
     assert.deepEqual(Object.keys((await summaryOf(env))[0].devices.pico.models).sort(), ["A8110", "A8210"]);
     assert.equal(db.prepare("SELECT codename FROM votes WHERE model = 'Quest 3'").get().codename, "eureka");
+  });
+
+  it("lists the reports of a game, one line for each model, answer and version of GamePort, with how many players said it", async () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    const env = { DB: d1(db), VOTER_SALT: "salt" };
+    const vote = (voter, extra) => worker.fetch(post(goodMessage({ voter, ...extra })), env);
+    await vote("1".repeat(32), { verdict: "works", device: "quest", model: "Quest 3S", app: "0.9.2" });
+    await vote("2".repeat(32), { verdict: "works", device: "quest", model: "Quest 3", app: "0.8.2" });
+    await vote("3".repeat(32), { verdict: "works", device: "quest", model: "Quest 3", app: "0.8.2" });
+    await vote("4".repeat(32), { verdict: "works", device: "quest", model: "Quest 3", app: "0.8.2" });
+    await vote("5".repeat(32), { verdict: "fails", device: "quest", model: "Quest 3", app: "0.7.0" });
+    await vote("6".repeat(32), { verdict: "works", device: "phone" });
+    // The newest version first, then the most said; a vote without a model is a line of its own, by kind of device.
+    assert.deepEqual(await reportsOf(env), [
+      { device: "quest", model: "Quest 3S", name: "Meta Quest 3S", verdict: "works", version: "0.9.2", n: 1 },
+      { device: "quest", model: "Quest 3", name: "Meta Quest 3", verdict: "works", version: "0.8.2", n: 3 },
+      { device: "phone", verdict: "works", version: "0.7.2", n: 1 },
+      { device: "quest", model: "Quest 3", name: "Meta Quest 3", verdict: "fails", version: "0.7.0", n: 1 },
+    ]);
+    // A vote marked as fixed counts as "works", as in the totals, and one added by hand has no version.
+    db.prepare("UPDATE vote_history SET fixed = '2026-11-01' WHERE verdict = 'fails'").run();
+    db.prepare("UPDATE vote_history SET app = 'admin' WHERE device = 'phone'").run();
+    const again = await reportsOf(env);
+    assert.equal(again.some((line) => line.verdict === "fails"), false);
+    assert.deepEqual(again.find((line) => line.device === "phone"), { device: "phone", verdict: "works", n: 1 });
+    // Only the game asked for, only on GET, and the test votes have their own route.
+    assert.deepEqual(await reportsOf(env, "/reports/42"), []);
+    assert.equal((await worker.fetch(get("/reports/abc"), env)).status, 404);
+    assert.equal((await worker.fetch(get("/reports/1125240", "POST"), env)).status, 405);
+    assert.deepEqual(await reportsOf(env, "/test/reports/1125240"), []);
+    // The summary every app reads is the same as before: the lines are not in it.
+    assert.equal("reports" in (await summaryOf(env))[0], false);
+  });
+
+  it("keeps the lines of the reports of a game to a few, and lists them by kind of device on a database without the models", async () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    const env = { DB: d1(db), VOTER_SALT: "salt" };
+    for (let i = 0; i < 30; i++) await worker.fetch(post(goodMessage({ voter: String(i).padStart(32, "0"), app: `0.${i}.0` })), env);
+    assert.equal((await reportsOf(env)).length, 24);
+    const old = new DatabaseSync(":memory:");
+    old.exec(stripped("model", "codename"));
+    const oldEnv = { DB: d1(old), VOTER_SALT: "salt" };
+    await worker.fetch(post(goodMessage({ model: "Quest 3", app: "0.9.2" })), oldEnv);
+    assert.deepEqual(await reportsOf(oldEnv), [{ device: "quest", verdict: "works", version: "0.9.2", n: 1 }]);
   });
 
   it("still saves the vote on a database that lacks the columns, keeping the ticks when it has those", async () => {
@@ -934,7 +982,7 @@ describe("the state of the report that goes with an answer", () => {
 
   it("still saves the vote on a database that has not had the migration, without the state", async () => {
     const db = new DatabaseSync(":memory:");
-    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*report_state +TEXT.*\n/gm, ""));
+    db.exec(legacySchema.replaceAll(/^\s*report_state +TEXT.*\n/gm, ""));
     const env = { DB: d1(db), VOTER_SALT: "salt" };
     assert.equal((await worker.fetch(post(goodMessage({ verdict: "fails", report: "sent", model: "Quest 3" })), env)).status, 204);
     const row = db.prepare("SELECT verdict, model FROM votes").get();
@@ -943,7 +991,7 @@ describe("the state of the report that goes with an answer", () => {
 
   it("is added by its migration to a database that lacks the columns", () => {
     const old = new DatabaseSync(":memory:");
-    old.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/^\s*report_state +TEXT.*\n/gm, ""));
+    old.exec(legacySchema.replaceAll(/^\s*report_state +TEXT.*\n/gm, ""));
     old.exec(readFileSync(new URL("./migrations/0017_report_state.sql", import.meta.url), "utf8"));
     old.prepare("UPDATE votes SET report_state = 'sent'").run();
     assert.doesNotThrow(() => old.prepare("SELECT report_state FROM votes_test").all());
@@ -973,5 +1021,127 @@ describe("the name of a device", () => {
   it("answers nothing for a code it does not know, so the raw code is shown", () => {
     assert.equal(deviceLabel("ZZ-NOT-A-DEVICE", "nope"), null);
     assert.equal(deviceLabel(null, null), null);
+  });
+});
+
+describe("the history of the answers", () => {
+  const fresh = () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    return { db, env: { DB: d1(db), VOTER_SALT: "salt" } };
+  };
+  const vote = (env, extra, path = "/vote") => worker.fetch(post(goodMessage(extra), path), env);
+  const lines = (db, table = "vote_history") => db.prepare(`SELECT verdict, app FROM ${table} ORDER BY id`).all().map((row) => [row.verdict, row.app]);
+
+  it("keeps every answer, and what is read is the last one of the player", async () => {
+    const { db, env } = fresh();
+    await vote(env, { verdict: "fails", app: "0.8.2" });
+    await vote(env, { verdict: "works", app: "0.9.0" });
+    await vote(env, { verdict: "works", app: "0.9.3" });
+    assert.deepEqual(lines(db), [["fails", "0.8.2"], ["works", "0.9.0"], ["works", "0.9.3"]]);
+    assert.deepEqual(db.prepare("SELECT verdict, app FROM votes").all().map((row) => [row.verdict, row.app]), [["works", "0.9.3"]]);
+    // The totals count the player once, with the last answer.
+    const [game] = (await (await worker.fetch(get(), env)).json()).games;
+    assert.equal(game.works, 1);
+    assert.equal(game.fails, 0);
+  });
+
+  it("renews the last line when the answer and the versions are the same, so the daily question adds nothing", async () => {
+    const { db, env } = fresh();
+    await vote(env, { verdict: "fails", app: "0.8.2", device: "quest", model: "Quest 3" });
+    await vote(env, { verdict: "fails", app: "0.8.2", device: "quest", model: "Quest 3S", issues: ["slow"] });
+    assert.deepEqual(lines(db), [["fails", "0.8.2"]]);
+    // What changed in the renewed answer is kept (the model, what was ticked).
+    const row = db.prepare("SELECT model, issues FROM votes").get();
+    assert.equal(row.model, "Quest 3S");
+    assert.equal(row.issues, "slow");
+  });
+
+  it("adds a line when the version of GamePort or the build of the game changes, even for the same answer", async () => {
+    const { db, env } = fresh();
+    await vote(env, { verdict: "works", app: "0.9.0", game: "b1" });
+    await vote(env, { verdict: "works", app: "0.9.3", game: "b1" });
+    await vote(env, { verdict: "works", app: "0.9.3", game: "b2" });
+    assert.equal(lines(db).length, 3);
+  });
+
+  it("counts a renewed answer again, as an answer marked as fixed is a vote like another when the player renews it", async () => {
+    const { db, env } = fresh();
+    await vote(env, { verdict: "fails", app: "0.8.2" });
+    db.prepare("UPDATE vote_history SET fixed = '2026-11-01', fixed_in = '0.9.0'").run();
+    await vote(env, { verdict: "fails", app: "0.8.2" });
+    assert.equal(db.prepare("SELECT fixed FROM votes").get().fixed, null);
+  });
+
+  it("keeps the players and the sets apart", async () => {
+    const { db, env } = fresh();
+    await vote(env, { verdict: "works" });
+    await vote(env, { verdict: "fails", voter: OTHER });
+    await vote(env, { verdict: "fails" }, "/test/vote");
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM votes").get().n, 2);
+    assert.deepEqual(lines(db, "vote_history_test"), [["fails", "0.7.2"]]);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM votes_test").get().n, 1);
+  });
+
+  it("is made by the migration from a database that has only the last answers, and keeps every one of them", async () => {
+    const old = new DatabaseSync(":memory:");
+    old.exec(legacySchema);
+    old.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated, fixed, fixed_in, voted_at, issues, model, codename, report_state) VALUES (1, 'aaaaaaaaaaaa', 'fails', '0.8.2', 'b1', 'quest', 0, '2026-10-08', '2026-10-20', '0.9.0', '2026-10-08T10:00:00Z', 'slow', 'Quest 3', 'eureka', 'sent')").run();
+    old.prepare("INSERT INTO votes (app_id, voter, verdict, app, game, device, offline, updated) VALUES (2, 'bbbbbbbbbbbb', 'works', '0.9.0', NULL, 'pico', 1, '2026-10-09')").run();
+    old.prepare("INSERT INTO votes_test (app_id, voter, verdict, app, game, device, offline, updated) VALUES (3, 'cccccccccccc', 'works', '0.9.0', NULL, 'phone', 0, '2026-10-09')").run();
+    const before = old.prepare("SELECT * FROM votes ORDER BY voter").all().map((row) => ({ ...row }));
+    old.exec(readFileSync(new URL("./migrations/0019_vote_history.sql", import.meta.url), "utf8"));
+    // What is read is the same as before, column for column.
+    assert.deepEqual(old.prepare("SELECT * FROM votes ORDER BY voter").all().map((row) => ({ ...row })), before);
+    assert.equal(old.prepare("SELECT COUNT(*) AS n FROM vote_history").get().n, 2);
+    assert.equal(old.prepare("SELECT COUNT(*) AS n FROM vote_history_test").get().n, 1);
+    // And the relay writes the next answer as a new line.
+    const env = { DB: d1(old), VOTER_SALT: "salt" };
+    await vote(env, { appId: 1, verdict: "works", app: "0.9.3" });
+    assert.equal(old.prepare("SELECT COUNT(*) AS n FROM vote_history").get().n, 3);
+  });
+
+  it("tells in the summary from which version a game works after it did not, and which version still works, for each kind of device", async () => {
+    const { env } = fresh();
+    await vote(env, { verdict: "fails", app: "0.8.2" });
+    await vote(env, { verdict: "works", app: "0.9.0" });
+    await vote(env, { verdict: "works", app: "0.9.3" });
+    await vote(env, { verdict: "works", app: "0.9.1", voter: OTHER });
+    const [game] = (await (await worker.fetch(get(), env)).json()).games;
+    assert.deepEqual(game.devices.quest.turn, { fixedIn: "0.9.0", failedIn: "0.8.2", stillIn: "0.9.3" });
+  });
+
+  it("has no turn in the summary for a game whose players never changed their answer, or without a history", async () => {
+    const { env } = fresh();
+    await vote(env, { verdict: "works", app: "0.9.0" });
+    assert.equal("turn" in (await (await worker.fetch(get(), env)).json()).games[0].devices.quest, false);
+    const old = new DatabaseSync(":memory:");
+    old.exec(legacySchema);
+    const oldEnv = { DB: d1(old), VOTER_SALT: "salt" };
+    await vote(oldEnv, { verdict: "fails", app: "0.8.2" });
+    assert.equal("turn" in (await (await worker.fetch(get(), oldEnv)).json()).games[0].devices.quest, false);
+  });
+
+  it("lists in the reports what the players of a line ticked, and from which version an older line may be solved", async () => {
+    const { env } = fresh();
+    await vote(env, { verdict: "fails", app: "0.8.2", model: "Quest 3" });
+    await vote(env, { verdict: "works", app: "0.9.0", model: "Quest 3" });
+    await vote(env, { verdict: "fails", app: "0.7.0", model: "Quest 3", voter: OTHER, issues: ["no_sound", "slow"] });
+    await vote(env, { verdict: "fails", app: "0.7.0", model: "A8110", device: "pico", voter: "3".repeat(32), issues: ["no_sound"] });
+    const answer = await (await worker.fetch(get("/reports/1125240"), env)).json();
+    const quest = answer.reports.find((line) => line.verdict === "fails" && line.device === "quest");
+    // The older line of the same kind of device that was seen working since: may be solved. Another kind of device is not told.
+    assert.deepEqual(quest, { device: "quest", model: "Quest 3", name: "Meta Quest 3", verdict: "fails", version: "0.7.0", n: 1, issues: { no_sound: 1, slow: 1 }, fixedSince: "0.9.0" });
+    assert.equal("fixedSince" in answer.reports.find((line) => line.device === "pico"), false);
+    assert.deepEqual(answer.turns, { quest: { fixedIn: "0.9.0", failedIn: "0.8.2" } });
+  });
+
+  it("still saves an answer on a database that has no history yet, the old way", async () => {
+    const old = new DatabaseSync(":memory:");
+    old.exec(legacySchema);
+    const env = { DB: d1(old), VOTER_SALT: "salt" };
+    assert.equal((await vote(env, { verdict: "fails" })).status, 204);
+    assert.equal((await vote(env, { verdict: "works" })).status, 204);
+    assert.deepEqual(old.prepare("SELECT verdict FROM votes").all().map((row) => row.verdict), ["works"]);
   });
 });

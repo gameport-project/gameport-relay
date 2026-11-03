@@ -11,7 +11,7 @@ import { deviceLabel } from "./device_names.js";
 import { ISSUE_SET } from "./issues.js";
 import { consolePage } from "./console_page.js";
 import { notifyVote } from "./notify.js";
-import { GAME_SETTINGS, deviceName, readReport, thisHour, voterHash } from "./worker.js";
+import { GAME_SETTINGS, HISTORY, deviceName, readReport, readTurns, thisHour, voterHash } from "./worker.js";
 
 const VERDICTS = new Set(["works", "offline_only", "fails"]);
 const DEVICES = new Set(["quest", "pico", "phone", "tablet", "other"]);
@@ -142,10 +142,23 @@ async function list(url, env) {
   if (!validId(appId)) return json(400, { error: "bad appId" });
   const labels = LABEL_TABLES[url.searchParams.get("env")];
   const rows = (await env.DB.prepare(
-    `SELECT v.app_id AS appId, v.voter, v.verdict, v.app, v.game, v.device, v.offline, v.updated, v.fixed, v.fixed_in AS fixedIn, v.issues, v.model, v.codename, v.report_state AS reportState, l.label FROM ${table} v ` +
+    `SELECT v.app_id AS appId, v.voter, v.verdict, v.app, v.game, v.device, v.offline, v.updated, v.voted_at AS votedAt, v.fixed, v.fixed_in AS fixedIn, v.issues, v.model, v.codename, v.report_state AS reportState, l.label FROM ${table} v ` +
     `LEFT JOIN ${labels} l ON l.voter = v.voter WHERE v.app_id = ? ORDER BY v.updated DESC, v.voter`,
   ).bind(appId).all()).results;
-  return json(200, { votes: rows.map((row) => ({ ...row, offline: row.offline === 1, deviceName: deviceLabel(row.model, row.codename) })) });
+  // Every answer of each player for the game, oldest first, for the players who gave more than one: what the console shows as their trail. Nothing before the history exists.
+  let trails = new Map();
+  let synth = {};
+  try {
+    const lines = (await env.DB.prepare(`SELECT voter, verdict, app, game, device, updated, voted_at AS votedAt, issues FROM ${HISTORY[table]} WHERE app_id = ? ORDER BY id`).bind(appId).all()).results;
+    for (const line of lines) trails.set(line.voter, [...(trails.get(line.voter) ?? []), line]);
+    trails = new Map([...trails].filter(([, trail]) => trail.length > 1));
+    // How many players went from "does not work" to "works" (whatever the version), and the turns by kind of device.
+    const moved = [...trails.values()].filter((trail) => trail.some((line, i) => line.verdict === "works" && trail.slice(0, i).some((before) => before.verdict !== "works"))).length;
+    synth = { moved, turns: (await readTurns(env, table, appId)).get(appId) ?? {} };
+  } catch {
+    trails = new Map();
+  }
+  return json(200, { synth, votes: rows.map((row) => ({ ...row, offline: row.offline === 1, deviceName: deviceLabel(row.model, row.codename), ...(trails.has(row.voter) ? { trail: trails.get(row.voter).map(({ voter, ...line }) => line) } : {}) })) });
 }
 
 async function add(message, env, table, environment, ctx, origin) {
@@ -163,7 +176,7 @@ async function add(message, env, table, environment, ctx, origin) {
   if (message.issues !== undefined && (!Array.isArray(message.issues) || message.issues.some((code) => typeof code !== "string" || !ISSUE_SET.has(code)))) return json(400, { error: "bad issues" });
   const issues = fields.verdict === "works" ? [] : [...new Set(message.issues ?? [])];
   const app = message.app || "admin";
-  await env.DB.prepare(`INSERT INTO ${table} (app_id, voter, verdict, app, game, device, offline, updated, voted_at, issues, model, codename) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  await env.DB.prepare(`INSERT INTO ${HISTORY[table]} (app_id, voter, verdict, app, game, device, offline, updated, voted_at, issues, model, codename) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(message.appId, voter, fields.verdict, app, null, fields.device, offline, today, thisHour(), issues.length ? issues.join(",") : null, deviceName(message.model), deviceName(message.codename)).run();
   log("add", { env: environment, appId: message.appId, voter, verdict: fields.verdict, device: fields.device });
   // Told like a player's vote, so the channel can be tried from here; it says the version typed here, or "admin" when none, where a player's says the version of GamePort.
@@ -189,7 +202,9 @@ async function change(message, env, table, environment) {
   if (message.fixed === true) fixed = row.fixed ?? new Date().toISOString().slice(0, 10);
   if (message.fixed === false) { fixed = null; fixedIn = null; }
   if (message.fixedIn !== undefined && fixed !== null) fixedIn = message.fixedIn;
-  await env.DB.prepare(`UPDATE ${table} SET verdict = ?, device = ?, offline = ?, fixed = ?, fixed_in = ? WHERE app_id = ? AND voter = ?`)
+  // The change is to the last answer of the player, the one that counts; the answers before it are left as they were.
+  const history = HISTORY[table];
+  await env.DB.prepare(`UPDATE ${history} SET verdict = ?, device = ?, offline = ?, fixed = ?, fixed_in = ? WHERE id = (SELECT MAX(id) FROM ${history} WHERE app_id = ? AND voter = ?)`)
     .bind(verdict, device, offline, fixed, fixedIn, message.appId, message.voter).run();
   log("change", { env: environment, appId: message.appId, voter: message.voter, before: { verdict: row.verdict, device: row.device, fixed: row.fixed }, after: { verdict, device, fixed } });
   return json(200, { ok: true });
@@ -200,7 +215,8 @@ async function remove(message, env, table, environment) {
   if (!validVoter(message.voter)) return json(400, { error: "bad voter" });
   const [row] = (await env.DB.prepare(`${SELECT(table)} WHERE app_id = ? AND voter = ?`).bind(message.appId, message.voter).all()).results;
   if (!row) return json(404, { error: "no such vote" });
-  await env.DB.prepare(`DELETE FROM ${table} WHERE app_id = ? AND voter = ?`).bind(message.appId, message.voter).run();
+  // Every answer of the player for the game goes, not only the last: a vote removed (spam, a test) must not count in the history either.
+  await env.DB.prepare(`DELETE FROM ${HISTORY[table]} WHERE app_id = ? AND voter = ?`).bind(message.appId, message.voter).run();
   log("remove", { env: environment, appId: message.appId, voter: message.voter, was: { verdict: row.verdict, device: row.device, fixed: row.fixed } });
   return json(200, { ok: true });
 }

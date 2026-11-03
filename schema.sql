@@ -1,5 +1,7 @@
--- One row per player and per game: a player who changes their mind replaces their vote, so a game is counted once per player.
-CREATE TABLE IF NOT EXISTS votes (
+-- Every answer a player gave about a game, oldest first: a player who changes their mind adds a line, so what the reports said at each version of GamePort is kept. What is read
+-- is the view `votes` below, the last line of each player and game: the totals, the console, the site and the app all read it, so a player counts once, with the last answer.
+CREATE TABLE IF NOT EXISTS vote_history (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
   app_id  INTEGER NOT NULL,
   voter   TEXT    NOT NULL,  -- a short salted hash, never the id the app keeps
   verdict TEXT    NOT NULL CHECK (verdict IN ('works', 'offline_only', 'fails')),
@@ -14,12 +16,14 @@ CREATE TABLE IF NOT EXISTS votes (
   issues  TEXT,              -- what the player ticked as going wrong, codes from a fixed list joined by commas (no_sound,slow); empty for "works" and for a player who ticked nothing
   model   TEXT,              -- what the device calls itself (Build.MODEL, a short plain name): the kind of device above stays the family; empty for the votes saved before it existed
   codename TEXT,             -- the codename of the device (Build.DEVICE), same rules
-  report_state TEXT,         -- what became of the report the app sent just before the answer: sent, waiting, refused or none; empty for the answers saved before it existed, and for "it worked"
-  PRIMARY KEY (app_id, voter)
+  report_state TEXT          -- what became of the report the app sent just before the answer: sent, waiting, refused or none; empty for the answers saved before it existed, and for "it worked"
 );
+CREATE INDEX IF NOT EXISTS vote_history_player ON vote_history (app_id, voter, id);
+CREATE VIEW IF NOT EXISTS votes AS SELECT app_id, voter, verdict, app, game, device, offline, updated, fixed, fixed_in, voted_at, issues, model, codename, report_state FROM vote_history WHERE id IN (SELECT MAX(id) FROM vote_history GROUP BY app_id, voter);
 
--- The same table for the test builds of the app (the /test routes): what they send never reaches the real totals.
-CREATE TABLE IF NOT EXISTS votes_test (
+-- The same for the test builds of the app (the /test routes): what they send never reaches the real totals.
+CREATE TABLE IF NOT EXISTS vote_history_test (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
   app_id  INTEGER NOT NULL,
   voter   TEXT    NOT NULL,  -- a short salted hash, never the id the app keeps
   verdict TEXT    NOT NULL CHECK (verdict IN ('works', 'offline_only', 'fails')),
@@ -31,12 +35,13 @@ CREATE TABLE IF NOT EXISTS votes_test (
   fixed   TEXT,              -- the day the problem was solved: from then on the vote counts as "works", whatever its answer; empty while it is not fixed
   fixed_in TEXT,             -- where it was solved, free text (a version of GamePort); only for the developer
   voted_at TEXT,             -- when the relay saved the vote, UTC, rounded down to the hour (YYYY-MM-DDTHH:00:00Z): only for the developer's console; empty for the votes saved before it existed
-  issues  TEXT,              -- what the player ticked as going wrong, codes from a fixed list joined by commas; empty for "works" and for a player who ticked nothing
+  issues  TEXT,              -- what the player ticked as going wrong, codes from a fixed list joined by commas (no_sound,slow); empty for "works" and for a player who ticked nothing
   model   TEXT,              -- what the device calls itself (Build.MODEL, a short plain name): the kind of device above stays the family; empty for the votes saved before it existed
   codename TEXT,             -- the codename of the device (Build.DEVICE), same rules
-  report_state TEXT,         -- what became of the report the app sent just before the answer: sent, waiting, refused or none; empty for the answers saved before it existed, and for "it worked"
-  PRIMARY KEY (app_id, voter)
+  report_state TEXT          -- what became of the report the app sent just before the answer: sent, waiting, refused or none; empty for the answers saved before it existed, and for "it worked"
 );
+CREATE INDEX IF NOT EXISTS vote_history_test_player ON vote_history_test (app_id, voter, id);
+CREATE VIEW IF NOT EXISTS votes_test AS SELECT app_id, voter, verdict, app, game, device, offline, updated, fixed, fixed_in, voted_at, issues, model, codename, report_state FROM vote_history_test WHERE id IN (SELECT MAX(id) FROM vote_history_test GROUP BY app_id, voter);
 
 -- The technical report a player's app sends after "it did not work" (a zip of facts and logs, redacted by the app). One per player and per game: a
 -- new one replaces the old. The zip is kept as base64 text. Rows older than 30 days are removed each time a report arrives.
