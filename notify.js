@@ -2,6 +2,11 @@
 // test set (secret DISCORD_TEST_WEBHOOK), so the tries of a test build never mix with the real ones. It is for one person: the address of a webhook is a secret of the
 // relay, never written in a file or a log. The player is only the short salted hash of the console (never the id the app keeps) and the name the developer gave them there,
 // when there is one, so the developer can open them in the console; a failure here changes nothing: the vote or the report is already saved, and the player gets the same answer.
+import { deviceLabel } from "./device_names.js";
+
+
+/** What a device is called in a message: its exact name when the model is known (Quest 3, Pico 4), the kind of device otherwise. */
+const deviceText = (item) => deviceLabel(item.model, item.codename) ?? DEVICES[item.device] ?? item.device;
 
 const WEBHOOK = /^https:\/\/(discord|discordapp)\.com\/api\/webhooks\/\d+\/[\w-]+$/;
 const NAME_TTL_MS = 3_600_000;
@@ -163,7 +168,7 @@ export function notifyVote(env, ctx, origin, vote, environment = "prod", player 
       color: answer.color,
       fields: [
         field("Answer", answer.text + (vote.offline && vote.verdict === "works" ? " (tried offline)" : "")),
-        field("Device", DEVICES[vote.device] ?? vote.device),
+        field("Device", deviceText(vote)),
         field("GamePort", vote.app),
         field("App", vote.appId),
         ...who.fields,
@@ -171,7 +176,7 @@ export function notifyVote(env, ctx, origin, vote, environment = "prod", player 
         ...(vote.game ? [field("Game build", vote.game)] : []),
         ...(vote.issues?.length ? [field("Problems", vote.issues.map((code) => `• ${ISSUE_WORDS[code] ?? code}`).join("\n"), false)] : []),
       ],
-    }, `${answer.text} · ${DEVICES[vote.device] ?? vote.device} · ${name}`);
+    }, `${answer.text} · ${deviceText(vote)} · ${name}`);
   })());
 }
 
@@ -192,12 +197,12 @@ export function notifyReport(env, ctx, origin, report, verdict, environment = "p
       color: answer ? answer.color : 0x9aa4b2,
       fields: [
         field("Player's answer", answer ? answer.text : "No vote"),
-        field("Device", DEVICES[report.device] ?? report.device),
+        field("Device", deviceText(report)),
         field("GamePort", report.app),
         field("Size", `${Math.max(1, Math.round(report.size / 1024))} KB`),
         field("App", report.appId),
         ...who.fields,
       ],
-    }, `New report${answer ? " (" + answer.text + ")" : ""} · ${DEVICES[report.device] ?? report.device} · ${name}`);
+    }, `New report${answer ? " (" + answer.text + ")" : ""} · ${deviceText(report)} · ${name}`);
   })());
 }

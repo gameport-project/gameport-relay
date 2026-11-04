@@ -290,7 +290,17 @@ async function report(request, env, table, ctx) {
     } catch {
       // The report is told without the player's answer, and without its link.
     }
-    notifyReport(env, ctx, new URL(request.url).origin, { id, appId: meta.appId, app: meta.app, device: meta.device, size: bytes.length }, answer, environment, voter);
+    // The model of the player's device, from the vote they already sent: the message names the exact device. A database without it leaves the kind of device.
+    let model = null;
+    let codename = null;
+    try {
+      const [named] = (await env.DB.prepare(`SELECT model, codename FROM ${votes} WHERE app_id = ? AND voter = ?`).bind(meta.appId, voter).all()).results;
+      model = named?.model ?? null;
+      codename = named?.codename ?? null;
+    } catch {
+      // No model to tell.
+    }
+    notifyReport(env, ctx, new URL(request.url).origin, { id, appId: meta.appId, app: meta.app, device: meta.device, model, codename, size: bytes.length }, answer, environment, voter);
   }
   return reply(204);
 }

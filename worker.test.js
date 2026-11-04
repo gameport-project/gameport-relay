@@ -673,6 +673,14 @@ describe("the messages to the developer's private channel", () => {
     assert.equal(sent[0].body.embeds[0].fields.find((f) => f.name === "Player").value, rowsOf(db)[0].voter);
   });
 
+  it("names the exact device in the channel's message when the model is known, and the kind of device when it is not", async () => {
+    await run(post(goodMessage({ appId: 846470, verdict: "fails", device: "quest", model: "Quest 3" })));
+    assert.equal(sent.at(-1).body.embeds[0].fields.find((f) => f.name === "Device").value, "Meta Quest 3");
+    sent.length = 0;
+    await run(post(goodMessage({ appId: 846470, verdict: "works", device: "pico" })));
+    assert.equal(sent.at(-1).body.embeds[0].fields.find((f) => f.name === "Device").value, "Pico");
+  });
+
   it("names a game from the catalog when Steam's store has nothing for it, as the console does, and keeps the number for a game nobody knows", async () => {
     assert.equal((await run(post(goodMessage({ appId: 885000, verdict: "works" })))).status, 204);
     assert.match(sent.at(-1).body.embeds[0].title, /^New vote: Name In The Catalog$/);
