@@ -1022,6 +1022,97 @@ describe("the state of the report that goes with an answer", () => {
   });
 });
 
+describe("how steadily a game ran", () => {
+  const fresh = () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    return { db, env: { DB: d1(db), VOTER_SALT: "salt" } };
+  };
+  // A schema from before migration 0020: the three columns and their place in the views are taken out.
+  const beforeMigration = () => {
+    const db = new DatabaseSync(":memory:");
+    const schema = readFileSync(new URL("./schema.sql", import.meta.url), "utf8")
+      .replaceAll(/report_state TEXT,( +--[^\n]*)\n( +perf_[^\n]*\n)+\);/g, "report_state TEXT$1\n);")
+      .replaceAll(", perf_seconds, perf_held, perf_target", "");
+    db.exec(schema);
+    return { db, env: { DB: d1(db), VOTER_SALT: "salt" } };
+  };
+  const voter = (i) => i.toString(16).padStart(32, "0");
+  const perf = (held, seconds = 600, target = 72) => ({ seconds, held, target });
+  const send = async (env, i, extra, path = "/vote") => assert.equal((await worker.fetch(post(goodMessage({ voter: voter(i), model: "Quest 3", ...extra }), path), env)).status, 204);
+  const modelOf = async (env, path = "/summary") => (await (await worker.fetch(get(path), env)).json()).games[0].devices.quest.models["Quest 3"];
+
+  it("keeps numbers that make sense together, and leaves out any other without refusing the vote", () => {
+    assert.deepEqual(validate(goodMessage({ perf: perf(570) })).vote.perf, { seconds: 600, held: 570, target: 72 });
+    const bad = [perf(570, 179), perf(601), perf(-1), perf(10, 90_000), perf(570, 600, 10), perf(570, 600, 500), { seconds: 600.5, held: 5, target: 72 }, { seconds: "600", held: 5, target: 72 }, [600, 570, 72], "steady", null, 7];
+    for (const value of bad) {
+      const checked = validate(goodMessage({ perf: value }));
+      assert.equal(checked.error, undefined, JSON.stringify(value));
+      assert.equal("perf" in checked.vote, false, JSON.stringify(value));
+    }
+    assert.equal("perf" in validate(goodMessage()).vote, false);
+  });
+
+  it("stores the numbers with the answer, keeps them when the same answer comes again without, and replaces them with new ones", async () => {
+    const { db, env } = fresh();
+    const stored = () => ({ ...db.prepare("SELECT perf_seconds AS seconds, perf_held AS held, perf_target AS target FROM votes").get() });
+    await send(env, 1, { perf: perf(540) });
+    assert.deepEqual(stored(), { seconds: 600, held: 540, target: 72 });
+    await send(env, 1, {});
+    assert.deepEqual(stored(), { seconds: 600, held: 540, target: 72 });
+    await send(env, 1, { perf: perf(300, 1200, 90) });
+    assert.deepEqual(stored(), { seconds: 1200, held: 300, target: 90 });
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM vote_history").get().n, 1);
+    await send(env, 2, { perf: perf(100) }, "/test/vote");
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM votes_test WHERE perf_seconds = 600").get().n, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM votes").get().n, 1);
+  });
+
+  it("shows a model's figure from three players: how many, and the middle player's share of the seconds that held the frame rate", async () => {
+    const { env } = fresh();
+    await send(env, 1, { perf: perf(594) });
+    await send(env, 2, { perf: perf(300) });
+    assert.equal((await modelOf(env)).perf, undefined);
+    await send(env, 3, { perf: perf(540) });
+    assert.deepEqual((await modelOf(env)).perf, [{ target: 72, n: 3, pct: 90 }]);
+    // One who played for hours weighs as much as the others (shares 0, 50, 90 and 99: the middle is 70), and a sample without the numbers is not counted.
+    await send(env, 4, { perf: perf(30, 36_000) });
+    await send(env, 5, {});
+    assert.deepEqual((await modelOf(env)).perf, [{ target: 72, n: 4, pct: 70 }]);
+  });
+
+  it("keeps each frame rate apart, since a player can run the same game at 72, 90 or 120 and only a rate with three players shows", async () => {
+    const { env } = fresh();
+    for (let i = 1; i <= 3; i++) await send(env, i, { perf: perf(590 + i, 600, 90) });
+    for (let i = 4; i <= 5; i++) await send(env, i, { perf: perf(300, 600, 72) });
+    for (let i = 6; i <= 9; i++) await send(env, i, { perf: perf(500, 600, 120) });
+    assert.deepEqual((await modelOf(env)).perf, [{ target: 120, n: 4, pct: 83 }, { target: 90, n: 3, pct: 99 }]);
+  });
+
+  it("puts the same figure on the lines of the details of a game, for the line of each model, answer and version", async () => {
+    const { env } = fresh();
+    for (let i = 1; i <= 3; i++) await send(env, i, { perf: perf(540 + i) });
+    await send(env, 4, { verdict: "fails", perf: perf(10) });
+    const body = await (await worker.fetch(get("/reports/1125240"), env)).json();
+    const works = body.reports.find((line) => line.verdict === "works");
+    assert.deepEqual(works.perf, [{ target: 72, n: 3, pct: 90 }]);
+    assert.equal(body.reports.find((line) => line.verdict === "fails").perf, undefined);
+  });
+
+  it("still saves the answer on a database that has not had the migration, and the migration adds the columns without touching the answers", async () => {
+    const { db, env } = beforeMigration();
+    await send(env, 1, { perf: perf(540) });
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM votes").get().n, 1);
+    assert.equal((await worker.fetch(get("/summary"), env)).status, 200);
+    assert.equal((await worker.fetch(get("/reports/1125240"), env)).status, 200);
+    db.exec(readFileSync(new URL("./migrations/0020_performance.sql", import.meta.url), "utf8"));
+    assert.equal(db.prepare("SELECT verdict, perf_seconds FROM votes").get().perf_seconds, null);
+    await send(env, 2, { perf: perf(540) });
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM votes WHERE perf_seconds = 600").get().n, 1);
+    assert.doesNotThrow(() => db.prepare("SELECT perf_held FROM votes_test").all());
+  });
+});
+
 describe("the name of a device", () => {
   it("names the headsets Google's list does not have, by model then by codename", () => {
     assert.equal(deviceLabel("Quest 3", "eureka"), "Meta Quest 3");

@@ -29,6 +29,10 @@ const CHUNK_BYTES = 600_000;
 // The table of parts that goes with each table of reports. The names come from here and from nowhere else.
 const PARTS = { reports: "report_parts", reports_test: "report_parts_test" };
 const REPORT_DAYS = 30;
+/** Fewer seconds of measured play than this say nothing about a game: the hook of GamePort gives no number below it, and the relay keeps none. */
+export const MIN_PERF_SECONDS = 180;
+/** How many players must have sent their numbers before a model shows a figure: one player is not a statistic. */
+export const MIN_PERF_PLAYERS = 3;
 const MAX_APP_ID = 2_000_000_000;
 
 /** What a device calls itself: a short plain name (letters, digits, space and . _ + - / ( )). Anything else is no name. */
@@ -61,7 +65,38 @@ export function validate(message) {
   vote.issues = message.verdict === "works" ? [] : ISSUES.filter((code) => (message.issues ?? []).includes(code));
   // What became of the technical report the app sent just before this answer: only for an answer that says something went wrong, and a state this version does not know is left out.
   if (message.verdict !== "works" && REPORT_STATES.has(message.report)) vote.report = message.report;
+  // How steadily the game ran, when the player agreed to send it: three whole numbers that make sense together, else left out (never a reason to lose the vote).
+  const perf = message.perf;
+  if (perf !== null && typeof perf === "object" && !Array.isArray(perf)
+    && Number.isInteger(perf.seconds) && Number.isInteger(perf.held) && Number.isInteger(perf.target)
+    && perf.seconds >= MIN_PERF_SECONDS && perf.seconds <= 86_400 && perf.held >= 0 && perf.held <= perf.seconds && perf.target >= 24 && perf.target <= 240) {
+    vote.perf = { seconds: perf.seconds, held: perf.held, target: perf.target };
+  }
   return { vote };
+}
+
+/**
+ * The figure for a group of players who sent how steadily the game ran at the same frame rate: how many they are and the middle player's share of seconds that held it (percent:
+ * one player who played for hours does not weigh more than the others). [rows] are {seconds, held}, never empty.
+ */
+export function performanceOf(rows) {
+  const shares = rows.map((row) => Math.round((100 * row.held) / row.seconds)).sort((a, b) => a - b);
+  const middle = shares.length >> 1;
+  const pct = shares.length % 2 ? shares[middle] : Math.round((shares[middle - 1] + shares[middle]) / 2);
+  return { n: rows.length, pct };
+}
+
+/**
+ * One figure for each frame rate the screens asked for: a player can run the same game at 72, 90 or 120 frames a second (an app such as QGO changes it), and those are not the same
+ * thing to hold. A frame rate shows only from MIN_PERF_PLAYERS players; the one most players ran comes first, then the higher. [rows] are {seconds, held, target}.
+ */
+export function performanceByTarget(rows) {
+  const byTarget = new Map();
+  for (const row of rows) byTarget.set(row.target, [...(byTarget.get(row.target) ?? []), row]);
+  return [...byTarget.entries()]
+    .filter(([, list]) => list.length >= MIN_PERF_PLAYERS)
+    .map(([target, list]) => ({ target, ...performanceOf(list) }))
+    .sort((a, b) => b.n - a.n || b.target - a.target);
 }
 
 /** The voter is stored as a short hash, so the id the app keeps is never in the database. */
@@ -155,19 +190,25 @@ async function recordVote(env, table, values, issues, checked) {
   const history = HISTORY[table];
   const [appId, voter, verdict, app, game, device, offline, today, hour] = values;
   const more = [issues, checked.model ?? null, checked.codename ?? null, checked.report ?? null];
-  try {
-    const [last] = (await env.DB.prepare(`SELECT id, verdict, app, game FROM ${history} WHERE app_id = ? AND voter = ? ORDER BY id DESC LIMIT 1`).bind(appId, voter).all()).results;
-    if (last && last.verdict === verdict && last.app === app && (last.game ?? null) === game) {
-      await env.DB.prepare(`UPDATE ${history} SET device = ?, offline = ?, updated = ?, voted_at = ?, issues = ?, model = ?, codename = ?, report_state = ?, fixed = NULL, fixed_in = NULL WHERE id = ?`)
-        .bind(device, offline, today, hour, ...more, last.id).run();
-    } else {
-      await env.DB.prepare(`INSERT INTO ${history} (app_id, voter, verdict, app, game, device, offline, updated, voted_at, issues, model, codename, report_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .bind(appId, voter, verdict, app, game, device, offline, today, hour, ...more).run();
+  const perf = [checked.perf?.seconds ?? null, checked.perf?.held ?? null, checked.perf?.target ?? null];
+  // A database that has not had migration 0020 cannot hold the numbers of the performance: the answer is then saved without them, which is better than none.
+  for (const withPerf of [true, false]) {
+    try {
+      const [last] = (await env.DB.prepare(`SELECT id, verdict, app, game FROM ${history} WHERE app_id = ? AND voter = ? ORDER BY id DESC LIMIT 1`).bind(appId, voter).all()).results;
+      if (last && last.verdict === verdict && last.app === app && (last.game ?? null) === game) {
+        // A renewed answer that comes without the numbers keeps the ones the player sent before.
+        await env.DB.prepare(`UPDATE ${history} SET device = ?, offline = ?, updated = ?, voted_at = ?, issues = ?, model = ?, codename = ?, report_state = ?${withPerf ? ", perf_seconds = COALESCE(?, perf_seconds), perf_held = COALESCE(?, perf_held), perf_target = COALESCE(?, perf_target)" : ""}, fixed = NULL, fixed_in = NULL WHERE id = ?`)
+          .bind(device, offline, today, hour, ...more, ...(withPerf ? perf : []), last.id).run();
+      } else {
+        await env.DB.prepare(`INSERT INTO ${history} (app_id, voter, verdict, app, game, device, offline, updated, voted_at, issues, model, codename, report_state${withPerf ? ", perf_seconds, perf_held, perf_target" : ""}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${withPerf ? ", ?, ?, ?" : ""})`)
+          .bind(appId, voter, verdict, app, game, device, offline, today, hour, ...more, ...(withPerf ? perf : [])).run();
+      }
+      return true;
+    } catch {
+      // The next try holds less.
     }
-    return true;
-  } catch {
-    return false;
   }
+  return false;
 }
 
 /** The relay's own clock, UTC, rounded down to the hour: the app never sends a time, and none of a player's is used. */
@@ -382,6 +423,23 @@ async function summary(env, table) {
   } catch {
     // No model column yet.
   }
+  // How steadily each model ran the game, for the players who sent their numbers: for each frame rate the screens asked for, how many players and the middle player's share of the
+  // seconds that held it. A frame rate shows only from MIN_PERF_PLAYERS of them. Nothing to read before migration 0020.
+  try {
+    const perfRows = (await env.DB.prepare(`SELECT app_id AS appId, device, model, perf_seconds AS seconds, perf_held AS held, perf_target AS target FROM ${table} WHERE perf_seconds >= ? AND model IS NOT NULL AND model <> ''`).bind(MIN_PERF_SECONDS).all()).results;
+    const byModel = new Map();
+    for (const row of perfRows) {
+      const key = [row.appId, row.device, row.model].join("\u0000");
+      byModel.set(key, [...(byModel.get(key) ?? []), row]);
+    }
+    for (const list of byModel.values()) {
+      const model = byGame.get(list[0].appId)?.devices[list[0].device]?.models?.[list[0].model];
+      const figures = performanceByTarget(list);
+      if (model && figures.length) model.perf = figures;
+    }
+  } catch {
+    // No performance columns yet.
+  }
   // The problems ticked for each model, next to its counts.
   for (const row of issueRows) {
     const model = row.model ? byGame.get(row.appId)?.devices[row.device]?.models?.[row.model] : null;
@@ -460,6 +518,21 @@ async function gameReports(env, table, appId) {
     for (const code of String(row.issues ?? "").split(",")) if (ISSUE_SET.has(code)) line.issues[code] = (line.issues[code] ?? 0) + 1;
     grouped.set(key, line);
   }
+  // How steadily each line ran the game, for the players who sent their numbers (nothing before migration 0020): a line shows a figure only from MIN_PERF_PLAYERS of them.
+  try {
+    const perfRows = (await env.DB.prepare(`SELECT device, COALESCE(model, '') AS model, app AS version, CASE WHEN fixed IS NULL THEN verdict ELSE 'works' END AS verdict, perf_seconds AS seconds, perf_held AS held, perf_target AS target FROM ${table} WHERE app_id = ? AND perf_seconds >= ?`).bind(appId, MIN_PERF_SECONDS).all()).results;
+    const byLine = new Map();
+    for (const row of perfRows) {
+      const key = [row.device, row.model, row.version, row.verdict].join("\u0000");
+      byLine.set(key, [...(byLine.get(key) ?? []), row]);
+    }
+    for (const [key, list] of byLine) {
+      const figures = performanceByTarget(list);
+      if (figures.length && grouped.has(key)) grouped.get(key).perf = figures;
+    }
+  } catch {
+    // No performance columns yet.
+  }
   const reports = [...grouped.values()]
     // The newest version first (a line without a version, or with one that is not one, last), then the most said.
     .sort((a, b) => Number(Boolean(parseVersion(b.version))) - Number(Boolean(parseVersion(a.version))) || (compareVersions(b.version, a.version) ?? 0) || b.n - a.n || a.device.localeCompare(b.device) || a.model.localeCompare(b.model))
@@ -476,6 +549,7 @@ async function gameReports(env, table, appId) {
         n: line.n,
         ...(Object.keys(line.issues).length ? { issues: line.issues } : {}),
         ...(since ? { fixedSince: since } : {}),
+        ...(line.perf ? { perf: line.perf } : {}),
       };
     });
   return reply(200, { v: 1, appId, reports, ...(Object.keys(turns).length ? { turns } : {}) }, { "cache-control": "public, max-age=300" });

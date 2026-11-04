@@ -220,7 +220,7 @@ describe("adding a vote", () => {
     assert.match(voter, /^[0-9a-f]{12}$/);
     assert.deepEqual(rows(), []);
     const [stored] = rows("votes_test");
-    assert.deepEqual({ ...stored, voter: undefined }, { app_id: 7, voter: undefined, verdict: "works", app: "admin", game: null, device: "pico", offline: 1, updated: new Date().toISOString().slice(0, 10), fixed: null, fixed_in: null, voted_at: `${new Date().toISOString().slice(0, 13)}:00:00Z`, issues: null, model: null, codename: null, report_state: null });
+    assert.deepEqual({ ...stored, voter: undefined }, { app_id: 7, voter: undefined, verdict: "works", app: "admin", game: null, device: "pico", offline: 1, updated: new Date().toISOString().slice(0, 10), fixed: null, fixed_in: null, voted_at: `${new Date().toISOString().slice(0, 13)}:00:00Z`, issues: null, model: null, codename: null, report_state: null, perf_seconds: null, perf_held: null, perf_target: null });
     assert.deepEqual(await summary("/test/summary"), [{ appId: 7, works: 1, offlineOnly: 0, fails: 0, worksOffline: 1, devices: { pico: { works: 1, offlineOnly: 0, fails: 0, worksOffline: 1 } } }]);
     assert.deepEqual(await summary(), []);
   });

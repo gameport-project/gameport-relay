@@ -16,10 +16,13 @@ CREATE TABLE IF NOT EXISTS vote_history (
   issues  TEXT,              -- what the player ticked as going wrong, codes from a fixed list joined by commas (no_sound,slow); empty for "works" and for a player who ticked nothing
   model   TEXT,              -- what the device calls itself (Build.MODEL, a short plain name): the kind of device above stays the family; empty for the votes saved before it existed
   codename TEXT,             -- the codename of the device (Build.DEVICE), same rules
-  report_state TEXT          -- what became of the report the app sent just before the answer: sent, waiting, refused or none; empty for the answers saved before it existed, and for "it worked"
+  report_state TEXT,         -- what became of the report the app sent just before the answer: sent, waiting, refused or none; empty for the answers saved before it existed, and for "it worked"
+  perf_seconds INTEGER,      -- seconds of play the hook could measure (session in focus, after its first minute): at least 180, else empty; sent only with the player's agreement
+  perf_held INTEGER,         -- how many of those seconds reached the frame rate the screen asked for with few old frames shown again
+  perf_target INTEGER        -- that frame rate (72, 90, 120)
 );
 CREATE INDEX IF NOT EXISTS vote_history_player ON vote_history (app_id, voter, id);
-CREATE VIEW IF NOT EXISTS votes AS SELECT app_id, voter, verdict, app, game, device, offline, updated, fixed, fixed_in, voted_at, issues, model, codename, report_state FROM vote_history WHERE id IN (SELECT MAX(id) FROM vote_history GROUP BY app_id, voter);
+CREATE VIEW IF NOT EXISTS votes AS SELECT app_id, voter, verdict, app, game, device, offline, updated, fixed, fixed_in, voted_at, issues, model, codename, report_state, perf_seconds, perf_held, perf_target FROM vote_history WHERE id IN (SELECT MAX(id) FROM vote_history GROUP BY app_id, voter);
 
 -- The same for the test builds of the app (the /test routes): what they send never reaches the real totals.
 CREATE TABLE IF NOT EXISTS vote_history_test (
@@ -38,10 +41,13 @@ CREATE TABLE IF NOT EXISTS vote_history_test (
   issues  TEXT,              -- what the player ticked as going wrong, codes from a fixed list joined by commas (no_sound,slow); empty for "works" and for a player who ticked nothing
   model   TEXT,              -- what the device calls itself (Build.MODEL, a short plain name): the kind of device above stays the family; empty for the votes saved before it existed
   codename TEXT,             -- the codename of the device (Build.DEVICE), same rules
-  report_state TEXT          -- what became of the report the app sent just before the answer: sent, waiting, refused or none; empty for the answers saved before it existed, and for "it worked"
+  report_state TEXT,         -- what became of the report the app sent just before the answer: sent, waiting, refused or none; empty for the answers saved before it existed, and for "it worked"
+  perf_seconds INTEGER,      -- seconds of play the hook could measure (session in focus, after its first minute): at least 180, else empty; sent only with the player's agreement
+  perf_held INTEGER,         -- how many of those seconds reached the frame rate the screen asked for with few old frames shown again
+  perf_target INTEGER        -- that frame rate (72, 90, 120)
 );
 CREATE INDEX IF NOT EXISTS vote_history_test_player ON vote_history_test (app_id, voter, id);
-CREATE VIEW IF NOT EXISTS votes_test AS SELECT app_id, voter, verdict, app, game, device, offline, updated, fixed, fixed_in, voted_at, issues, model, codename, report_state FROM vote_history_test WHERE id IN (SELECT MAX(id) FROM vote_history_test GROUP BY app_id, voter);
+CREATE VIEW IF NOT EXISTS votes_test AS SELECT app_id, voter, verdict, app, game, device, offline, updated, fixed, fixed_in, voted_at, issues, model, codename, report_state, perf_seconds, perf_held, perf_target FROM vote_history_test WHERE id IN (SELECT MAX(id) FROM vote_history_test GROUP BY app_id, voter);
 
 -- The technical report a player's app sends after "it did not work" (a zip of facts and logs, redacted by the app). One per player and per game: a
 -- new one replaces the old. The zip is kept as base64 text. Rows older than 30 days are removed each time a report arrives.
