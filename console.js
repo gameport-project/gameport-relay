@@ -141,10 +141,18 @@ async function list(url, env) {
   if (!table) return json(400, { error: "bad env" });
   if (!validId(appId)) return json(400, { error: "bad appId" });
   const labels = LABEL_TABLES[url.searchParams.get("env")];
-  const rows = (await env.DB.prepare(
-    `SELECT v.app_id AS appId, v.voter, v.verdict, v.app, v.game, v.device, v.offline, v.updated, v.voted_at AS votedAt, v.fixed, v.fixed_in AS fixedIn, v.issues, v.model, v.codename, v.report_state AS reportState, l.label FROM ${table} v ` +
+  const readVotes = (perf) => env.DB.prepare(
+    `SELECT v.app_id AS appId, v.voter, v.verdict, v.app, v.game, v.device, v.offline, v.updated, v.voted_at AS votedAt, v.fixed, v.fixed_in AS fixedIn, v.issues, v.model, v.codename, v.report_state AS reportState, ` +
+    `${perf ? "v.perf_seconds AS perfSeconds, v.perf_held AS perfHeld, v.perf_target AS perfTarget, " : ""}l.label FROM ${table} v ` +
     `LEFT JOIN ${labels} l ON l.voter = v.voter WHERE v.app_id = ? ORDER BY v.updated DESC, v.voter`,
-  ).bind(appId).all()).results;
+  ).bind(appId).all();
+  // A database that has not had migration 0020 has no numbers of performance to show: the answers are read without them.
+  let rows;
+  try {
+    rows = (await readVotes(true)).results;
+  } catch {
+    rows = (await readVotes(false)).results;
+  }
   // Every answer of each player for the game, oldest first, for the players who gave more than one: what the console shows as their trail. Nothing before the history exists.
   let trails = new Map();
   let synth = {};

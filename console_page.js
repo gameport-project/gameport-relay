@@ -593,6 +593,15 @@ function reportPill(state) {
   return info ? el("span", { class: "pill " + info[1], text: info[0], title: info[2] }) : document.createTextNode("");
 }
 
+/** How steadily the game ran for the player who sent it: the share of the measured seconds that held the frame rate the screen asked for, in the colour of an answer (nothing when not sent). */
+function perfPill(v) {
+  if (!v.perfSeconds) return document.createTextNode("");
+  var pct = Math.round(100 * v.perfHeld / v.perfSeconds);
+  var minutes = Math.round(v.perfSeconds / 60);
+  var level = pct >= 90 ? "v-works" : pct >= 70 ? "v-offline_only" : "v-fails";
+  return el("span", { class: "pill " + level, text: "Steady " + pct + " %", title: v.perfHeld + " of " + v.perfSeconds + " measured seconds (" + minutes + " min) held " + v.perfTarget + " frames a second without old frames shown again" });
+}
+
 /** What the player answered for the game the report is about: the colour says which answer, "no vote" when there is none. */
 function answerPill(r) {
   if (!r.verdict) return el("span", { class: "pill v-none", text: "No vote" });
@@ -1171,6 +1180,7 @@ function row(v) {
       el("div", { class: "vote-title" }, [el("strong", { text: title, title: [v.model, v.codename].filter(Boolean).join(" / ") }), el("span", { class: "ver", title: "Version of GamePort that sent this vote", text: "- " + v.app })]),
       codes.length ? issuePills(codes) : document.createTextNode(""),
       v.reportState ? el("div", { class: "report-state" }, [reportPill(v.reportState)]) : document.createTextNode(""),
+      v.perfSeconds ? el("div", { class: "report-state" }, [perfPill(v)]) : document.createTextNode(""),
       v.trail ? trailLine(v) : document.createTextNode(""),
       el("div", { class: "vote-meta" }, details.map(function (piece, i) {
         var part = piece === v.voter ? el("span", {}, [playerLink(v.voter, v.label), document.createTextNode(v.app === "admin" ? " (admin)" : "")]) : document.createTextNode(piece);
