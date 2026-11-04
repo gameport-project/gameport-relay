@@ -570,6 +570,7 @@ function loadVotes() {
   call("/console/api/votes?env=" + state.env + "&appId=" + state.current.appid).then(function (data) {
     state.votes = data.votes;
     state.synth = data.synth;
+    state.deviceChoices = data.deviceChoices || [];
     drawDetail();
   }).catch(function (e) { toast(e.message, true); });
 }
@@ -1078,16 +1079,56 @@ function row(v) {
   var verdict = select(Object.keys(VERDICTS), answer, VERDICTS);
   var offline = el("input", { type: "checkbox" });
   offline.checked = v.offline;
-  var dirty = function () { return device.value !== v.device || verdict.value !== answer || offline.checked !== v.offline; };
-  var save = el("button", { type: "button", class: "btn", text: "Save", disabled: "disabled", onclick: function () {
-    if (!confirmWrite("Change a vote of " + g.name + ": " + v.device + ", " + VERDICTS[answer] + " becomes " + device.value + ", " + VERDICTS[verdict.value] + ".")) return;
-    call("/console/api/change", { appId: g.appid, voter: v.voter, device: device.value, verdict: verdict.value, offline: offline.checked })
+  // The precise device, by the kind picked: the headsets of that brand for a Quest or a Pico, a search in the list of devices for the others.
+  var picked = v.model || "";
+  var modelBox = el("span", { class: "model-box" });
+  var found = {};
+  var refresh = function () { verdict.className = "ans-" + verdict.value; save.hidden = !dirty(); };
+  var drawModel = function () {
+    modelBox.textContent = "";
+    var kind = device.value;
+    var headsets = (state.deviceChoices || []).filter(function (c) { return c.kind === kind; });
+    if (kind === "quest" || kind === "pico") {
+      var labels = { "": "Not specified" };
+      headsets.forEach(function (c) { labels[c.model] = c.label; });
+      // A model the player's app sent that is not in the list stays as it is, so saving another change never wipes it.
+      if (picked && !(picked in labels)) labels[picked] = v.deviceName || picked;
+      var menu = select(Object.keys(labels), picked, labels);
+      menu.addEventListener("change", function () { picked = menu.value; refresh(); });
+      modelBox.appendChild(menu);
+    } else {
+      var list = el("datalist", { id: "models-" + v.voter });
+      var typed = el("input", { type: "text", list: "models-" + v.voter, placeholder: "Search a model", value: picked ? (v.deviceName || picked) : "" });
+      typed.addEventListener("input", function () {
+        var text = typed.value.trim();
+        if (text === "") { picked = ""; refresh(); return; }
+        if (found[text]) { picked = found[text]; refresh(); return; }
+        if (text.length < 2) return;
+        call("/console/api/models?q=" + encodeURIComponent(text)).then(function (data) {
+          list.textContent = "";
+          found = {};
+          data.models.forEach(function (m) { var name = m.label + " (" + m.model + ")"; found[name] = m.model; list.appendChild(el("option", { value: name })); });
+        }).catch(function () {});
+      });
+      modelBox.appendChild(typed);
+      modelBox.appendChild(list);
+    }
+  };
+  var dirty = function () { return device.value !== v.device || verdict.value !== answer || offline.checked !== v.offline || picked !== (v.model || ""); };
+  var save = el("button", { type: "button", class: "btn", text: "Save", onclick: function () {
+    if (!confirmWrite("Change a vote of " + g.name + ": " + v.device + ", " + VERDICTS[answer] + " becomes " + device.value + ", " + VERDICTS[verdict.value] + "." + (verdict.value === "works" && answer !== "works" ? " The problems ticked by the player are removed." : ""))) return;
+    var message = { appId: g.appid, voter: v.voter, device: device.value, verdict: verdict.value, offline: offline.checked };
+    if (picked !== (v.model || "")) message.model = picked === "" ? null : picked;
+    call("/console/api/change", message)
       .then(function () { toast("Saved"); loadVotes(); loadCounts().then(drawGames); }).catch(function (e) { toast(e.message, true); });
   } });
   // The answer shows its colour, and Save only appears once something is changed.
   verdict.className = "ans-" + verdict.value;
   save.hidden = true;
-  [device, verdict, offline].forEach(function (n) { n.addEventListener("change", function () { verdict.className = "ans-" + verdict.value; save.hidden = !dirty(); }); });
+  [verdict, offline].forEach(function (n) { n.addEventListener("change", refresh); });
+  // Another kind of device offers other models: the one picked goes when it does not belong to it.
+  device.addEventListener("change", function () { picked = (v.model && device.value === v.device) ? v.model : ""; drawModel(); refresh(); });
+  drawModel();
 
   var fixedBtn = el("button", { type: "button", class: "btn", text: v.fixed ? "Not fixed" : "Mark fixed", onclick: function () {
     if (v.fixed) {
@@ -1116,7 +1157,7 @@ function row(v) {
 
   // Changing a vote is rare too: its fields stay folded until "Edit" is pressed.
   var editor = el("div", { class: "vote-edit", hidden: "hidden" }, [
-    el("label", {}, [document.createTextNode("Device "), device]), el("label", {}, [document.createTextNode("Answer "), verdict]),
+    el("label", {}, [document.createTextNode("Device "), device]), el("label", {}, [document.createTextNode("Model "), modelBox]), el("label", {}, [document.createTextNode("Answer "), verdict]),
     el("label", { class: "check" }, [offline, document.createTextNode(" Worked offline")]), save,
   ]);
   var edit = el("button", { type: "button", class: "btn", text: "Edit", onclick: function () { editor.hidden = !editor.hidden; } });

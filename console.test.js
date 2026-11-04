@@ -69,8 +69,8 @@ const ask = async (path, { method = "GET", body, jwt, headers = {}, page = true,
   return worker.fetch(new Request(`${ORIGIN}${path}`, { method, headers: all, body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body) }), env);
 };
 
-const vote = (appId, voter, extra = {}) => db.prepare("INSERT INTO vote_history (app_id, voter, verdict, app, game, device, offline, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-  .run(appId, voter, extra.verdict ?? "fails", extra.app ?? "0.7.2", null, extra.device ?? "quest", extra.offline ? 1 : 0, "2026-10-08");
+const vote = (appId, voter, extra = {}) => db.prepare("INSERT INTO vote_history (app_id, voter, verdict, app, game, device, offline, updated, issues, model, codename) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+  .run(appId, voter, extra.verdict ?? "fails", extra.app ?? "0.7.2", null, extra.device ?? "quest", extra.offline ? 1 : 0, "2026-10-08", extra.issues ?? null, extra.model ?? null, extra.codename ?? null);
 const summary = async (path = "/summary") => (await (await worker.fetch(new Request(`${ORIGIN}${path}`), env)).json()).games;
 
 describe("who may come in", () => {
@@ -317,6 +317,38 @@ describe("changing any vote", () => {
     assert.deepEqual([rows()[0].verdict, rows()[0].device, rows()[0].offline], ["works", "phone", 1]);
     await ask("/console/api/change", { method: "POST", body: { env: "prod", appId: 5, voter: "aaaaaaaaaaaa", verdict: "fails" } });
     assert.deepEqual([rows()[0].verdict, rows()[0].offline], ["fails", 0]);
+  });
+
+  it("takes the problems the player ticked away when the answer becomes works, and keeps them for any other answer", async () => {
+    vote(5, "aaaaaaaaaaaa", { verdict: "fails", issues: "flat_window,black_screen" });
+    await ask("/console/api/change", { method: "POST", body: { env: "prod", appId: 5, voter: "aaaaaaaaaaaa", device: "pico" } });
+    assert.equal(rows()[0].issues, "flat_window,black_screen");
+    await ask("/console/api/change", { method: "POST", body: { env: "prod", appId: 5, voter: "aaaaaaaaaaaa", verdict: "works" } });
+    assert.equal(rows()[0].issues, null);
+  });
+
+  it("names a precise device, takes its codename away, and refuses a model the console does not know", async () => {
+    vote(5, "aaaaaaaaaaaa", { verdict: "fails", model: "A8110", codename: "PICOA8110", device: "pico" });
+    const choice = (await (await ask("/console/api/votes?env=prod&appId=5")).json()).deviceChoices;
+    assert.ok(choice.some((c) => c.model === "Quest 2" && c.label === "Meta Quest 2"));
+    assert.equal((await ask("/console/api/change", { method: "POST", body: { env: "prod", appId: 5, voter: "aaaaaaaaaaaa", model: "Quest 2", device: "quest" } })).status, 200);
+    assert.deepEqual([rows()[0].model, rows()[0].codename, rows()[0].device], ["Quest 2", null, "quest"]);
+    assert.equal((await ask("/console/api/change", { method: "POST", body: { env: "prod", appId: 5, voter: "aaaaaaaaaaaa", model: "Nokia 3310" } })).status, 400);
+    assert.equal((await ask("/console/api/change", { method: "POST", body: { env: "prod", appId: 5, voter: "aaaaaaaaaaaa", model: null } })).status, 200);
+    assert.equal(rows()[0].model, null);
+  });
+
+  it("lists the headsets by kind, searches the other devices, and accepts a model of the list for a phone", async () => {
+    vote(5, "aaaaaaaaaaaa", { verdict: "fails", device: "phone" });
+    const choices = (await (await ask("/console/api/votes?env=prod&appId=5")).json()).deviceChoices;
+    assert.deepEqual(choices.filter((c) => c.kind === "pico").map((c) => c.label), ["Pico 4", "Pico 4 Pro", "Pico 4 Ultra"]);
+    assert.ok(choices.filter((c) => c.kind === "quest").every((c) => c.label.startsWith("Meta Quest")));
+    const found = (await (await ask("/console/api/models?q=dell%20streak")).json()).models;
+    assert.deepEqual(found[0], { model: "001DL", label: "Dell Streak" });
+    assert.ok(found.every((m) => m.label === "Dell Streak"));
+    assert.deepEqual((await (await ask("/console/api/models?q=x")).json()).models, []);
+    assert.equal((await ask("/console/api/change", { method: "POST", body: { env: "prod", appId: 5, voter: "aaaaaaaaaaaa", model: "001DL" } })).status, 200);
+    assert.equal(rows()[0].model, "001DL");
   });
 
   it("marks a vote as fixed: it counts as works, and nothing else is touched", async () => {

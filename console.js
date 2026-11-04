@@ -7,7 +7,7 @@
 //  - What a route reads and writes is chosen by the route, from two names written here, never from a message.
 // Without the three secrets (ACCESS_TEAM, ACCESS_AUD, ADMIN_EMAIL), nothing here answers: every route is a 404, as if it did not exist.
 
-import { deviceLabel } from "./device_names.js";
+import { DEVICE_CHOICES, deviceLabel, knownModel, searchModels } from "./device_names.js";
 import { ISSUE_SET } from "./issues.js";
 import { consolePage } from "./console_page.js";
 import { notifyVote } from "./notify.js";
@@ -158,7 +158,7 @@ async function list(url, env) {
   } catch {
     trails = new Map();
   }
-  return json(200, { synth, votes: rows.map((row) => ({ ...row, offline: row.offline === 1, deviceName: deviceLabel(row.model, row.codename), ...(trails.has(row.voter) ? { trail: trails.get(row.voter).map(({ voter, ...line }) => line) } : {}) })) });
+  return json(200, { synth, deviceChoices: DEVICE_CHOICES, votes: rows.map((row) => ({ ...row, offline: row.offline === 1, deviceName: deviceLabel(row.model, row.codename), ...(trails.has(row.voter) ? { trail: trails.get(row.voter).map(({ voter, ...line }) => line) } : {}) })) });
 }
 
 async function add(message, env, table, environment, ctx, origin) {
@@ -191,10 +191,16 @@ async function change(message, env, table, environment) {
   if (error) return json(400, { error });
   if (message.fixed !== undefined && typeof message.fixed !== "boolean") return json(400, { error: "bad fixed" });
   if (message.fixedIn !== undefined && !validFixedIn(message.fixedIn)) return json(400, { error: "bad fixedIn" });
+  // A precise device: a model the relay can name (a headset, or a device of Google Play's list), or null to forget the model. Its codename goes with it, so the name shown is the one picked.
+  if (message.model !== undefined && message.model !== null && !knownModel(message.model)) return json(400, { error: "bad model" });
   const [row] = (await env.DB.prepare(`${SELECT(table)} WHERE app_id = ? AND voter = ?`).bind(message.appId, message.voter).all()).results;
   if (!row) return json(404, { error: "no such vote" });
   const verdict = fields.verdict ?? row.verdict;
   const device = fields.device ?? row.device;
+  const model = message.model !== undefined ? message.model : row.model;
+  const codename = message.model !== undefined ? null : row.codename;
+  // The problems ticked by the player only go with an answer that says it fails: an answer made "works" from the console loses them, or it would count as "works with problems".
+  const issues = verdict === "works" ? null : row.issues;
   // "Worked offline" only means something for a vote that says it worked.
   const offline = verdict === "works" && (fields.offline ?? row.offline === 1) ? 1 : 0;
   let fixed = row.fixed;
@@ -204,8 +210,8 @@ async function change(message, env, table, environment) {
   if (message.fixedIn !== undefined && fixed !== null) fixedIn = message.fixedIn;
   // The change is to the last answer of the player, the one that counts; the answers before it are left as they were.
   const history = HISTORY[table];
-  await env.DB.prepare(`UPDATE ${history} SET verdict = ?, device = ?, offline = ?, fixed = ?, fixed_in = ? WHERE id = (SELECT MAX(id) FROM ${history} WHERE app_id = ? AND voter = ?)`)
-    .bind(verdict, device, offline, fixed, fixedIn, message.appId, message.voter).run();
+  await env.DB.prepare(`UPDATE ${history} SET verdict = ?, device = ?, offline = ?, fixed = ?, fixed_in = ?, issues = ?, model = ?, codename = ? WHERE id = (SELECT MAX(id) FROM ${history} WHERE app_id = ? AND voter = ?)`)
+    .bind(verdict, device, offline, fixed, fixedIn, issues, model, codename, message.appId, message.voter).run();
   log("change", { env: environment, appId: message.appId, voter: message.voter, before: { verdict: row.verdict, device: row.device, fixed: row.fixed }, after: { verdict, device, fixed } });
   return json(200, { ok: true });
 }
@@ -555,6 +561,7 @@ export async function handleConsole(request, env, ctx) {
       });
     }
     if (url.pathname === "/console/api/votes") return request.method === "GET" ? await list(url, env) : json(405, { error: "use GET" });
+    if (url.pathname === "/console/api/models") return request.method === "GET" ? json(200, { models: searchModels(url.searchParams.get("q")) }) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/app") return request.method === "GET" ? await appInfo(url) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/price") return request.method === "GET" ? await appPrice(url) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/news") return request.method === "GET" ? await news(url, env) : json(405, { error: "use GET" });
