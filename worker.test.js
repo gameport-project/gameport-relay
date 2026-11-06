@@ -1203,6 +1203,31 @@ describe("migration 0023, the day a line began", () => {
   });
 });
 
+describe("migration 0025, the version of the votes added by hand", () => {
+  it("gives a line saved as admin the release that was out at its time, and leaves the others", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    const add = db.prepare("INSERT INTO vote_history (app_id, voter, verdict, app, device, updated, voted_at) VALUES (?, ?, 'works', ?, 'quest', ?, ?)");
+    add.run(1, "aaaaaaaaaaaa", "admin", "2026-10-30", "2026-10-30T10:00:00Z"); // after 0.9.2
+    add.run(2, "bbbbbbbbbbbb", "admin", "2026-11-04", null); // only the day: noon, after 0.9.3 and before 0.9.4
+    add.run(3, "cccccccccccc", "admin", "2026-11-04", "2026-11-04T22:00:00Z"); // half past ten, before 0.9.4 went out at 23:23
+    add.run(4, "dddddddddddd", "admin", "2026-09-01", null); // before the first release
+    add.run(5, "eeeeeeeeeeee", "0.9.1", "2026-10-30", "2026-10-30T10:00:00Z"); // a real line
+    db.exec("INSERT INTO vote_history_test (app_id, voter, verdict, app, device, updated, voted_at) VALUES (1, 'aaaaaaaaaaaa', 'works', 'admin', 'quest', '2026-11-05', '2026-11-05T08:00:00Z')");
+    db.exec(readFileSync(new URL("./migrations/0025_admin_versions.sql", import.meta.url), "utf8"));
+    assert.deepEqual(db.prepare("SELECT app_id, app FROM vote_history ORDER BY app_id").all().map((row) => ({ ...row })), [
+      { app_id: 1, app: "0.9.2" }, { app_id: 2, app: "0.9.3" }, { app_id: 3, app: "0.9.3" }, { app_id: 4, app: "admin" }, { app_id: 5, app: "0.9.1" },
+    ]);
+    assert.equal(db.prepare("SELECT app FROM vote_history_test").get().app, "0.9.4");
+    // A line saved in the hour a release came out counts by the middle of the hour: 23:00 means about 23:30, after the 23:23 release.
+    db.exec("INSERT INTO vote_history (app_id, voter, verdict, app, device, updated, voted_at) VALUES (6, 'ffffffffffff', 'works', 'admin', 'quest', '2026-11-04', '2026-11-04T23:00:00Z')");
+    db.exec(readFileSync(new URL("./migrations/0025_admin_versions.sql", import.meta.url), "utf8"));
+    assert.equal(db.prepare("SELECT app FROM vote_history WHERE app_id = 6").get().app, "0.9.4");
+    // The view of the last answers carries the new version.
+    assert.equal(db.prepare("SELECT app FROM votes WHERE app_id = 1").get().app, "0.9.2");
+  });
+});
+
 describe("migration 0024, aligning the devices of a player", () => {
   it("gives the lines without a model the one model of the same player and kind, and leaves the rest", () => {
     const db = new DatabaseSync(":memory:");
