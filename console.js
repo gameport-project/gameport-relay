@@ -109,7 +109,9 @@ const MAX_GROUP_VOTES = 1000;
 const MAX_HISTORY_LINES = 20000;
 // A device is known by its name; the spellings (model and codename) that share it are few.
 const MAX_DEVICE_SPELLINGS = 30;
-const validDeviceName = (name) => typeof name === "string" && /^[\w %.\-]{1,80}$/.test(name);
+const validDeviceName = (name) => typeof name === "string" && /^[\w %.\-:]{1,80}$/.test(name);
+// A page of a whole kind of device is asked as "kind:quest".
+const DEVICE_KINDS = new Set(["quest", "pico", "phone", "tablet", "other"]);
 const validVoter = (voter) => typeof voter === "string" && /^[0-9a-f]{12}$/.test(voter);
 /** A name for a player: one line of text, no markup and no control character. Returns the trimmed text, or null. */
 const checkLabel = (text) => {
@@ -512,7 +514,10 @@ async function version(url, env) {
 /** What a device is called on its page: its name when the list knows it, else its model, else the kind of device. The console groups the same way. */
 const groupName = (device, model, codename) => deviceLabel(model, codename) ?? (model || device);
 
-/** Every answer and every report that came from one device (a headset, say): the devices that carry the same name are one, whatever model or codename each one reports. */
+/**
+ * Every answer and every report that came from one device (a headset, say), or from a whole kind of device when the name is "kind:quest": the devices that carry the same name are one,
+ * whatever model or codename each one reports. `choices` lists the kinds and the devices of the set, for the page's own list to switch from one to another.
+ */
 async function deviceGroup(url, env) {
   const environment = url.searchParams.get("env");
   const table = TABLES[environment];
@@ -520,14 +525,25 @@ async function deviceGroup(url, env) {
   const name = url.searchParams.get("name");
   if (!validDeviceName(name)) return json(400, { error: "bad name" });
   const seen = (await env.DB.prepare(`SELECT DISTINCT device, model, codename FROM ${table}`).all()).results;
+  const choices = {
+    kinds: [...new Set(seen.map((row) => row.device).filter(Boolean))],
+    devices: [...new Map(seen.map((row) => [groupName(row.device, row.model, row.codename), row.device])).entries()].map(([device, kind]) => ({ name: device, kind })),
+  };
+  if (name.startsWith("kind:")) {
+    const kind = name.slice(5);
+    if (!DEVICE_KINDS.has(kind)) return json(400, { error: "bad name" });
+    const votes = await votesWhere(environment, "v.device = ?", [kind], env);
+    const reports = await reportRows(environment, " WHERE r.device = ?", [kind], env);
+    return json(200, { name, votes, reports, changes: await changesWhere(environment, "device = ?", [kind], env), choices });
+  }
   const same = seen.filter((row) => groupName(row.device, row.model, row.codename) === name).slice(0, MAX_DEVICE_SPELLINGS);
-  if (!same.length) return json(200, { name, votes: [], reports: [], changes: [] });
+  if (!same.length) return json(200, { name, votes: [], reports: [], changes: [], choices });
   const matches = (device, model, codename) => same.map(() => `(${device} = ? AND ${model} IS ? AND ${codename} IS ?)`).join(" OR ");
   const binds = same.flatMap((row) => [row.device, row.model ?? null, row.codename ?? null]);
   const votes = await votesWhere(environment, `(${matches("v.device", "v.model", "v.codename")})`, binds, env);
   const reports = await reportRows(environment, ` WHERE (${matches("r.device", "v.model", "v.codename")})`, binds, env);
   const changes = await changesWhere(environment, `(${matches("device", "model", "codename")})`, binds, env);
-  return json(200, { name, votes, reports, changes });
+  return json(200, { name, votes, reports, changes, choices });
 }
 
 /** Gives a player a name (or takes it away with an empty one). The name stays in the developer's database and in the console: it is not written in the journal. */
@@ -725,7 +741,7 @@ async function setDefault(message, env, _table, environment) {
 const WRITES = { "/console/api/game-default-set": setDefault, "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove, "/console/api/report-handled": handleReport, "/console/api/incompatible-set": setIncompatible, "/console/api/reason-set": setReason, "/console/api/reason-remove": removeReason, "/console/api/incompatible-remove": removeIncompatible, "/console/api/seen": seen, "/console/api/player-label": setLabel };
 
 /** The page answers at /console and at an address that names the set and what is open: /console/prod, /console/test/1125240, /console/prod/version/0.9.4, /console/prod/reports, /console/prod/news, /console/test/reasons. */
-const PAGE_PATH = /^\/console\/?$|^\/console\/(test|prod)(\/(\d{1,10}|reports|news|reasons|defaults|player\/[0-9a-f]{12}|version\/\d{1,3}\.\d{1,3}\.\d{1,3}(?:-alpha\.\d{1,5})?|device\/[\w%.\-]{1,80}))?\/?$/;
+const PAGE_PATH = /^\/console\/?$|^\/console\/(test|prod)(\/(\d{1,10}|reports|news|reasons|defaults|player\/[0-9a-f]{12}|version\/\d{1,3}\.\d{1,3}\.\d{1,3}(?:-alpha\.\d{1,5})?|device\/[\w%.\-:]{1,80}))?\/?$/;
 
 /** The routes of the console. Returns a response, or null when the path is not one of the console's. */
 export async function handleConsole(request, env, ctx) {

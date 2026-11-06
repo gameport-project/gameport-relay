@@ -785,6 +785,14 @@ describe("the players", () => {
     assert.deepEqual((await voters("pico")).votes.map((v) => v.voter), ["ffffffffffff"]);
     assert.deepEqual((await voters("Meta Quest Pro")).votes, []);
     assert.equal((await ask("/console/api/device?env=prod&name=%3Cscript%3E")).status, 400);
+    // A whole kind of device, and the list to switch from one device to another.
+    const kind = await (await ask("/console/api/device?env=prod&name=kind%3Aquest")).json();
+    assert.deepEqual(kind.votes.map((v) => v.voter).sort(), ["aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc"]);
+    assert.ok(kind.votes.every((v) => v.device === "quest"));
+    assert.deepEqual(kind.choices.kinds.sort(), ["phone", "pico", "quest"]);
+    assert.ok(kind.choices.devices.some((d) => d.name === "Meta Quest 3" && d.kind === "quest"));
+    assert.equal((await ask("/console/api/device?env=prod&name=kind%3Anothing")).status, 400);
+    assert.equal((await ask("/console/prod/device/kind%3Aquest")).status, 200);
   });
 
   it("gives the numbers of the home: days, evolution, best players, devices, versions and the changes of the week", async () => {

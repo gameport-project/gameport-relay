@@ -160,6 +160,8 @@ button.bar-row[aria-pressed="true"] { background:rgba(255,255,255,.06); border-c
 .barstack { display:flex; gap:2px; height:14px; border-radius:999px; overflow:hidden; background:rgba(255,255,255,.07); }
 .barstack-part { display:flex; align-items:center; justify-content:center; flex-basis:0; min-width:18px; overflow:hidden; font-size:11px; font-weight:700; color:#10131a; text-shadow:0 1px 0 rgba(255,255,255,.25); }
 .barstack-part.seg-works { background:linear-gradient(180deg,#6ee7b0,#37a972); } .barstack-part.seg-offline_only { background:linear-gradient(180deg,#f8cd75,#dc9a2f); } .barstack-part.seg-fails { background:linear-gradient(180deg,#fa9494,#dc5252); }
+.device-title { max-width:100%; height:42px; padding:0 40px 0 16px; border:1px solid var(--line); border-radius:999px; background:rgba(15,19,27,.55); color:inherit; font:inherit; font-size:20px; font-weight:700; cursor:pointer; }
+.device-title option, .device-title optgroup { background:#1b2130; font-size:15px; font-weight:500; }
 .device-pick { height:34px; padding:0 34px 0 14px; border:1px solid var(--line); border-radius:999px; background:rgba(15,19,27,.55); color:inherit; font:inherit; font-size:13.5px; cursor:pointer; }
 .device-pick option { background:#1b2130; }
 .legend.key { margin:0 0 14px; } .dot-accent { background:#7f8fd4; }
@@ -394,7 +396,7 @@ var FR = {
   "For each version: among the players who answered in the days after it first appeared, the share already on it (or a newer one). Only players who answer are seen.": "Pour chaque version : parmi les joueurs qui ont répondu dans les jours après son apparition, la part déjà dessus (ou sur une plus récente). Seuls les joueurs qui répondent sont vus.",
   "No version yet.": "Aucune version pour l'instant.", "No release version yet.": "Aucune version publiée pour l'instant.", "Out since": "Sortie le", "Within 3 days": "En 3 jours", "Within 7 days": "En 7 jours", "Within 14 days": "En 14 jours", "in progress": "en cours", "Nobody answered in this window": "Personne n'a répondu sur cette fenêtre",
   "Reading: among the players who answered during the first 7 days of a version, this share was already on it. Only players who answer are seen.": "Lecture : parmi les joueurs qui ont répondu pendant les 7 premiers jours d'une version, cette part était déjà dessus. Seuls les joueurs qui répondent sont vus.",
-  "Players": "Joueurs", "Verdict": "Verdict", "No game here.": "Aucun jeu ici.", "Phones": "Téléphones", "Tablets": "Tablettes", "Other": "Autres", "now": "en ce moment", "last 31 days": "31 derniers jours", "month": "mois", "Players concerned": "Joueurs concernés", "Updated": "Mis à jour", "Usual wait": "Délai habituel", "the same day": "le même jour", "Do not work": "Ne marchent pas",
+  "Players": "Joueurs", "All Quest": "Tous les Quest", "All Pico": "Tous les Pico", "All phones": "Tous les téléphones", "All tablets": "Toutes les tablettes", "All other devices": "Tous les autres appareils", "Verdict": "Verdict", "No game here.": "Aucun jeu ici.", "Phones": "Téléphones", "Tablets": "Tablettes", "Other": "Autres", "now": "en ce moment", "last 31 days": "31 derniers jours", "month": "mois", "Players concerned": "Joueurs concernés", "Updated": "Mis à jour", "Usual wait": "Délai habituel", "the same day": "le même jour", "Do not work": "Ne marchent pas",
   "Only players who answered in this period are counted, and only those who were already there before a version came out. Of them, the share whose last answer is on that version or a newer one.": "Seuls les joueurs qui ont répondu sur cette période sont comptés, et seulement ceux qui étaient déjà là avant la sortie d'une version. Parmi eux, la part dont la dernière réponse est sur cette version ou une plus récente.",
   "No player seen in this period was there before this version": "Aucun joueur vu sur cette période n'était là avant cette version", "Sort": "Trier"
 };
@@ -486,7 +488,7 @@ function trText(text) {
 
 var EN_TEXT = typeof WeakMap === "function" ? new WeakMap() : null;
 var EN_ATTR = typeof WeakMap === "function" ? new WeakMap() : null;
-var TRANSLATED_ATTRS = ["title", "placeholder", "aria-label"];
+var TRANSLATED_ATTRS = ["title", "placeholder", "aria-label", "label"];
 
 /** Draws [node] and what is under it in the language picked: a text keeps its English original, so the language can be switched back and forth. */
 function localize(node) {
@@ -1041,7 +1043,7 @@ function deviceKey(v) {
 function deviceLink(v, text, tip, plain) {
   var key = deviceKey(v);
   var label = plain ? el("strong", { text: text, title: tip }) : document.createTextNode(text);
-  if (!key || key.length > 80 || !/^[\\w %.\\-]+$/.test(key)) return label;
+  if (!key || key.length > 80 || !/^[\\w %.\\-:]+$/.test(key)) return label;
   return el("a", { class: "ver-link", href: "/console/" + state.env + "/device/" + encodeURIComponent(key), title: "Every answer and report of " + key,
     onclick: function (event) { event.preventDefault(); showGroup("device", key); } }, [label]);
 }
@@ -1196,6 +1198,37 @@ function gamesTable(ids, perGame, classOfGame) {
   return el("div", { class: "scroll" }, [table]);
 }
 
+var KIND_ORDER = ["quest", "pico", "phone", "tablet", "other"];
+var KIND_ALL = { quest: "All Quest", pico: "All Pico", phone: "All phones", tablet: "All tablets", other: "All other devices" };
+
+/** What a device page is called: the name, or "All Quest" for the page of a whole kind. */
+function deviceTitle(value) {
+  return value.indexOf("kind:") === 0 ? (KIND_ALL[value.slice(5)] || "All " + value.slice(5)) : deviceShown(value);
+}
+
+/**
+ * The list that stands for the title of a device page: all the devices of a kind, or one model at a time, grouped by brand. Choosing another opens its page. [choices] are the kinds and
+ * the devices the relay knows in this set; the one shown is kept in the list even if the relay does not name it.
+ */
+function devicePicker(current, choices) {
+  var select = el("select", { class: "device-title", "aria-label": "Device" });
+  var listed = {};
+  var brandOf = { quest: "Meta", pico: "Pico", phone: "Phones", tablet: "Tablets", other: "Other" };
+  KIND_ORDER.filter(function (k) { return choices.kinds.indexOf(k) !== -1; }).forEach(function (kind) {
+    var group = el("optgroup", { label: brandOf[kind] }, [el("option", { value: "kind:" + kind, text: KIND_ALL[kind] })]);
+    listed["kind:" + kind] = true;
+    choices.devices.filter(function (d) { return d.kind === kind; }).sort(function (x, y) { return x.name < y.name ? -1 : 1; }).forEach(function (d) {
+      listed[d.name] = true;
+      group.appendChild(el("option", { value: d.name, text: deviceShown(d.name) }));
+    });
+    select.appendChild(group);
+  });
+  if (!listed[current]) select.insertBefore(el("option", { value: current, text: deviceTitle(current) }), select.firstChild);
+  select.value = current;
+  select.addEventListener("change", function () { showGroup("device", select.value); });
+  return select;
+}
+
 var groupAsked = 0;
 
 /** A card with a title: the page of a version, of a device and the home are made of them. */
@@ -1214,10 +1247,14 @@ function showGroup(kind, value) {
   drawGames();
   var panel = document.getElementById("detail");
   panel.textContent = "";
-  panel.appendChild(el("h2", { text: (kind === "version" ? "GamePort " : "") + value }));
+  var heading = el("h2", { text: kind === "version" ? "GamePort " + value : deviceTitle(value) });
+  panel.appendChild(heading);
   call("/console/api/" + kind + "?env=" + state.env + "&" + (kind === "version" ? "app" : "name") + "=" + encodeURIComponent(value)).then(function (data) {
     // Only the last request draws, as for a player.
     if (mine !== groupAsked || state.view !== "group") return;
+    // For a device the title becomes a list to go to another device, or to a whole kind of device.
+    if (kind === "device" && data.choices) { heading.textContent = ""; heading.appendChild(devicePicker(value, data.choices)); }
+    var wholeKind = kind === "device" && value.indexOf("kind:") === 0;
     var body = el("div");
     panel.appendChild(body);
     var mode = "answers";
@@ -1265,7 +1302,7 @@ function showGroup(kind, value) {
       var list = [el("h2", { text: (mode === "games" ? "Games (" + shownGames.length : "Answers (" + shown.length) + ")" })];
       if (picked) list.push(el("p", { class: "filter-note" }, [document.createTextNode("Only " + (mode === "games" ? "the games that " : "the answers that ") + { works: "work", offline_only: "work offline only", fails: "do not work" }[picked]), el("button", { type: "button", text: "Show all", onclick: function () { picked = null; paint(); } })]));
       if (mode === "games") list.push(shownGames.length ? gamesTable(shownGames, perGame, classOfGame) : el("p", { class: "muted", text: "No game here." }));
-      else list.push(shown.length ? answersTable(shown, kind) : el("p", { class: "muted", text: "No answer here." }));
+      else list.push(shown.length ? answersTable(shown, wholeKind ? "all" : kind) : el("p", { class: "muted", text: "No answer here." }));
       body.appendChild(el("div", { class: "answers-block" }, list));
       body.appendChild(el("h2", { text: "Reports (" + data.reports.length + ")" }));
       body.appendChild(data.reports.length ? reportsTable(data.reports, true, function () { showGroup(kind, value); }, false) : el("p", { class: "muted", text: "No report here." }));
@@ -2140,7 +2177,7 @@ fetch(CATALOG).then(function (r) { return r.json(); }).then(function (data) {
   state.games = data.apps.slice().sort(function (a, b) { return a.name.localeCompare(b.name); });
   // The address says what to open: /console/prod/1125240 a game in production, /console/test/reports or /news or /reasons a page, ?voted only the games with votes.
   // The old addresses (#1125240/prod, #reports, #voted) still open the same thing, and are rewritten.
-  var route = location.pathname.match(/^\\/console\\/(test|prod)(?:\\/(\\d+|reports|news|reasons|defaults|player\\/[0-9a-f]{12}|version\\/\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(?:-alpha\\.\\d{1,5})?|device\\/[\\w%.\\-]{1,80}))?\\/?$/);
+  var route = location.pathname.match(/^\\/console\\/(test|prod)(?:\\/(\\d+|reports|news|reasons|defaults|player\\/[0-9a-f]{12}|version\\/\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(?:-alpha\\.\\d{1,5})?|device\\/[\\w%.\\-:]{1,80}))?\\/?$/);
   var env = route ? route[1] : "test";
   var section = route ? route[2] : null;
   var old = location.hash.match(/^#(?:(\\d+)|(reports))(\\/prod)?$/);
