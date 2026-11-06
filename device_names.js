@@ -11,6 +11,7 @@ const HEADSET_MODELS = {
   A81E0: "Pico 4",
   A8210: "Pico 4 Pro",
   A92Y0: "Pico 4 Ultra",
+  B3110: "Pico Space Pro",
 };
 /** The headsets the console lists by kind of device, by the model code the app sends and the name shown: the first model of each name. */
 export const DEVICE_CHOICES = Object.entries(HEADSET_MODELS)
@@ -25,6 +26,7 @@ const HEADSET_CODENAMES = {
   seacliff: "Meta Quest Pro",
   PICOA8110: "Pico 4",
   sparrow: "Pico 4 Ultra",
+  swan: "Pico Space Pro",
 };
 
 /**

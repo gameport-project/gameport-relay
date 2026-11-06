@@ -341,7 +341,7 @@ describe("changing any vote", () => {
   it("lists the headsets by kind, searches the other devices, and accepts a model of the list for a phone", async () => {
     vote(5, "aaaaaaaaaaaa", { verdict: "fails", device: "phone" });
     const choices = (await (await ask("/console/api/votes?env=prod&appId=5")).json()).deviceChoices;
-    assert.deepEqual(choices.filter((c) => c.kind === "pico").map((c) => c.label), ["Pico 4", "Pico 4 Pro", "Pico 4 Ultra"]);
+    assert.deepEqual(choices.filter((c) => c.kind === "pico").map((c) => c.label), ["Pico 4", "Pico 4 Pro", "Pico 4 Ultra", "Pico Space Pro"]);
     assert.ok(choices.filter((c) => c.kind === "quest").every((c) => c.label.startsWith("Meta Quest")));
     const found = (await (await ask("/console/api/models?q=dell%20streak")).json()).models;
     assert.deepEqual(found[0], { model: "001DL", label: "Dell Streak" });
