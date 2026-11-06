@@ -417,6 +417,26 @@ describe("the reports", () => {
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM vote_history").get().n, 1);
   });
 
+  it("gives the older lines of a player the model a newer answer brings, only when it is the one model of that kind", async () => {
+    const lineFor = (appId, device = "pico") => ({ ...db.prepare("SELECT model, codename FROM vote_history WHERE app_id = ? AND device = ?").get(appId, device) });
+    // Two answers from before the app said its model, then one that does.
+    assert.equal((await worker.fetch(post(goodMessage({ appId: 11, device: "pico" })), env)).status, 204);
+    assert.equal((await worker.fetch(post(goodMessage({ appId: 12, device: "pico" })), env)).status, 204);
+    assert.deepEqual(lineFor(11), { model: null, codename: null });
+    assert.equal((await worker.fetch(post(goodMessage({ appId: 13, device: "pico", model: "A8110", codename: "phoenix" })), env)).status, 204);
+    assert.deepEqual(lineFor(11), { model: "A8110", codename: "phoenix" });
+    assert.deepEqual(lineFor(12), { model: "A8110", codename: "phoenix" });
+    // Another kind of device is left alone, and so is a line that has its model.
+    assert.equal((await worker.fetch(post(goodMessage({ appId: 14, device: "quest" })), env)).status, 204);
+    assert.deepEqual(lineFor(14, "quest"), { model: null, codename: null });
+    // A second model of the same kind: the next old line is not guessed.
+    assert.equal((await worker.fetch(post(goodMessage({ appId: 15, device: "pico", model: "A92Y0", codename: "sparrow" })), env)).status, 204);
+    assert.equal((await worker.fetch(post(goodMessage({ appId: 16, device: "pico" })), env)).status, 204);
+    assert.equal((await worker.fetch(post(goodMessage({ appId: 17, device: "pico", model: "A92Y0", codename: "sparrow" })), env)).status, 204);
+    assert.deepEqual(lineFor(16), { model: null, codename: null });
+    assert.deepEqual(lineFor(11), { model: "A8110", codename: "phoenix" });
+  });
+
   it("never stores the raw voter id, nor the address", async () => {
     await worker.fetch(new Request(`https://relay.example.invalid/report?${query()}`, { method: "POST", body: ZIP, headers: { "CF-Connecting-IP": "203.0.113.9" } }), env);
     const row = db.prepare("SELECT * FROM reports").get();
@@ -1180,6 +1200,27 @@ describe("migration 0023, the day a line began", () => {
     assert.equal(db.prepare("SELECT first_day FROM vote_history_test").get().first_day, "2026-11-04");
     // The views do not list the column, so they still read.
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM votes").get().n, 1);
+  });
+});
+
+describe("migration 0024, aligning the devices of a player", () => {
+  it("gives the lines without a model the one model of the same player and kind, and leaves the rest", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    const add = db.prepare("INSERT INTO vote_history (app_id, voter, verdict, app, device, updated, model, codename) VALUES (?, ?, 'works', '0.9.0', ?, '2026-11-01', ?, ?)");
+    add.run(1, "aaaaaaaaaaaa", "pico", null, null); add.run(2, "aaaaaaaaaaaa", "pico", "", null); add.run(3, "aaaaaaaaaaaa", "pico", "A8110", "phoenix"); // one model: both old lines get it
+    add.run(1, "bbbbbbbbbbbb", "pico", null, null); add.run(2, "bbbbbbbbbbbb", "pico", "A8110", "x"); add.run(3, "bbbbbbbbbbbb", "pico", "A92Y0", "sparrow"); // two models: left
+    add.run(1, "cccccccccccc", "quest", null, null); add.run(2, "cccccccccccc", "pico", "A8110", "phoenix"); // another kind: left
+    db.exec("INSERT INTO vote_history_test (app_id, voter, verdict, app, device, updated, model, codename) VALUES (1, 'aaaaaaaaaaaa', 'works', '0.9.0', 'pico', '2026-11-01', NULL, NULL), (2, 'aaaaaaaaaaaa', 'works', '0.9.0', 'pico', '2026-11-01', 'A8110', 'phoenix')");
+    db.exec(readFileSync(new URL("./migrations/0024_align_devices.sql", import.meta.url), "utf8"));
+    const rows = (sql) => db.prepare(sql).all().map((row) => ({ ...row }));
+    assert.deepEqual(rows("SELECT app_id, model, codename FROM vote_history WHERE voter = 'aaaaaaaaaaaa' ORDER BY app_id"), [{ app_id: 1, model: "A8110", codename: "phoenix" }, { app_id: 2, model: "A8110", codename: "phoenix" }, { app_id: 3, model: "A8110", codename: "phoenix" }]);
+    assert.deepEqual(rows("SELECT app_id, model FROM vote_history WHERE voter = 'bbbbbbbbbbbb' ORDER BY app_id"), [{ app_id: 1, model: null }, { app_id: 2, model: "A8110" }, { app_id: 3, model: "A92Y0" }]);
+    assert.deepEqual(rows("SELECT app_id, model FROM vote_history WHERE voter = 'cccccccccccc' ORDER BY app_id"), [{ app_id: 1, model: null }, { app_id: 2, model: "A8110" }]);
+    assert.equal(db.prepare("SELECT model FROM vote_history_test WHERE app_id = 1").get().model, "A8110");
+    // Run again: nothing changes.
+    db.exec(readFileSync(new URL("./migrations/0024_align_devices.sql", import.meta.url), "utf8"));
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM vote_history WHERE model IS NULL OR model = ''").get().n, 2);
   });
 });
 

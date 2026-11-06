@@ -241,6 +241,23 @@ async function markFirstDay(env, history, appId, voter, today) {
 }
 
 /**
+ * Gives the older lines of a player that came without a model (the app did not send it yet, only the kind of device) the model of a newer answer of the same kind of device, when the
+ * player has given one model of that kind and no other: the same install is the same device. With two models of the kind nothing is guessed, and a line that has a model is never touched.
+ * A database with no history yet has nothing to align: the answer is never lost for it.
+ */
+async function alignDevice(env, table, voter, device, model, codename) {
+  const history = HISTORY[table];
+  try {
+    await env.DB.prepare(
+      `UPDATE ${history} SET model = ?, codename = CASE WHEN codename IS NULL OR codename = '' THEN ? ELSE codename END WHERE voter = ? AND device = ? AND (model IS NULL OR model = '') ` +
+      `AND (SELECT COUNT(DISTINCT model) FROM ${history} WHERE voter = ? AND device = ? AND model IS NOT NULL AND model <> '') = 1`,
+    ).bind(model, codename ?? null, voter, device, voter, device).run();
+  } catch {
+    // Nothing to align.
+  }
+}
+
+/**
  * Keeps the Discord name the player typed, one per player (not per game): every answer that carries one renews it, an empty one takes it away. It goes in a table of its own that only
  * the console reads, never in the votes the site and the totals are made from. A database that has not had migration 0022 has no such table: nothing is kept, and the answer is never lost for it.
  */
@@ -307,6 +324,7 @@ async function vote(request, env, table, ctx) {
   // What the database said stays here: the player only learns that it did not work.
   if (!saved) return reply(500, { error: "not saved" });
   if (checked.discord !== undefined) await saveContact(env, table, voter, checked.discord);
+  if (checked.model) await alignDevice(env, table, voter, checked.device, checked.model, checked.codename);
   // Each set tells its own channel: the real votes the real one, the test set the one for tries.
   if (table === "votes" || table === "votes_test") notifyVote(env, ctx, new URL(request.url).origin, checked, table === "votes" ? "prod" : "test", voter);
   return reply(204);
