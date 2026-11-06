@@ -27,6 +27,8 @@ const MAX_REPORTS_LISTED = 200;
 // The names the developer gives to players (a Discord name, say), for the same two sets: the player stays a short hash everywhere else.
 const LABEL_TABLES = { prod: "player_labels", test: "player_labels_test" };
 const MAX_LABEL = 40;
+// The Discord name each player typed in the app, for the same two sets: shown as the player's name when the developer gave none. Only the console reads it.
+const CONTACT_TABLES = { prod: "player_contacts", test: "player_contacts_test" };
 // The games confirmed as incompatible, for the same two sets.
 const INCOMPATIBLE_TABLES = { prod: { games: "incompatible", reasons: "incompatible_reasons" }, test: { games: "incompatible_test", reasons: "incompatible_reasons_test" } };
 // What the developer tells the app about each game, for the same two sets (see GAME_SETTINGS in worker.js).
@@ -141,18 +143,26 @@ async function list(url, env) {
   if (!table) return json(400, { error: "bad env" });
   if (!validId(appId)) return json(400, { error: "bad appId" });
   const labels = LABEL_TABLES[url.searchParams.get("env")];
-  const readVotes = (perf) => env.DB.prepare(
+  const contacts = CONTACT_TABLES[url.searchParams.get("env")];
+  const readVotes = (perf, discord) => env.DB.prepare(
     `SELECT v.app_id AS appId, v.voter, v.verdict, v.app, v.game, v.device, v.offline, v.updated, v.voted_at AS votedAt, v.fixed, v.fixed_in AS fixedIn, v.issues, v.model, v.codename, v.report_state AS reportState, ` +
-    `${perf ? "v.perf_seconds AS perfSeconds, v.perf_held AS perfHeld, v.perf_target AS perfTarget, " : ""}l.label FROM ${table} v ` +
-    `LEFT JOIN ${labels} l ON l.voter = v.voter WHERE v.app_id = ? ORDER BY v.updated DESC, v.voter`,
+    `${perf ? "v.perf_seconds AS perfSeconds, v.perf_held AS perfHeld, v.perf_target AS perfTarget, " : ""}` +
+    // The name shown for a player is the one the developer gave, and when there is none the Discord name the player typed: the developer's wins, since that is the one corrected.
+    `${discord ? "COALESCE(l.label, c.discord)" : "l.label"} AS label FROM ${table} v ` +
+    `LEFT JOIN ${labels} l ON l.voter = v.voter ${discord ? `LEFT JOIN ${contacts} c ON c.voter = v.voter ` : ""}WHERE v.app_id = ? ORDER BY v.updated DESC, v.voter`,
   ).bind(appId).all();
-  // A database that has not had migration 0020 has no numbers of performance to show: the answers are read without them.
+  // A database that has not had migration 0020 has no numbers of performance to show, and one that has not had 0022 has no Discord names: the answers are read without them.
   let rows;
-  try {
-    rows = (await readVotes(true)).results;
-  } catch {
-    rows = (await readVotes(false)).results;
+  let failure;
+  for (const [perf, discord] of [[true, true], [true, false], [false, false]]) {
+    try {
+      rows = (await readVotes(perf, discord)).results;
+      break;
+    } catch (error) {
+      failure = error;
+    }
   }
+  if (!rows) throw failure;
   // Every answer of each player for the game, oldest first, for the players who gave more than one: what the console shows as their trail. Nothing before the history exists.
   let trails = new Map();
   let synth = {};
@@ -329,12 +339,20 @@ async function reportRows(environment, where, binds, env) {
   const table = REPORT_TABLES[environment];
   const votes = VOTE_OF_REPORTS[table];
   const labels = LABEL_TABLES[environment];
-  const statement = env.DB.prepare(
-    `SELECT r.id, r.app_id AS appId, r.voter, l.label, r.app, r.device, v.model, v.codename, r.size, r.updated, r.handled, v.verdict, v.offline FROM ${table} r ` +
-    `LEFT JOIN ${votes} v ON v.app_id = r.app_id AND v.voter = r.voter LEFT JOIN ${labels} l ON l.voter = r.voter${where} ` +
+  const contacts = CONTACT_TABLES[environment];
+  // The name is the one the developer gave, else the Discord name the player typed; a database that has not had migration 0022 has no such table.
+  const statementFor = (withContact) => env.DB.prepare(
+    `SELECT r.id, r.app_id AS appId, r.voter, ${withContact ? "COALESCE(l.label, c.discord)" : "l.label"} AS label, r.app, r.device, v.model, v.codename, r.size, r.updated, r.handled, v.verdict, v.offline FROM ${table} r ` +
+    `LEFT JOIN ${votes} v ON v.app_id = r.app_id AND v.voter = r.voter LEFT JOIN ${labels} l ON l.voter = r.voter ${withContact ? `LEFT JOIN ${contacts} c ON c.voter = r.voter` : ""}${where} ` +
     `ORDER BY r.handled IS NOT NULL, r.updated DESC, r.id DESC LIMIT ${MAX_REPORTS_LISTED}`,
   );
-  const rows = (await (binds.length ? statement.bind(...binds) : statement).all()).results;
+  const readRows = async (withContact) => (await (binds.length ? statementFor(withContact).bind(...binds) : statementFor(withContact)).all()).results;
+  let rows;
+  try {
+    rows = await readRows(true);
+  } catch {
+    rows = await readRows(false);
+  }
   return rows.map((row) => ({ ...row, label: row.label ?? null, deviceName: deviceLabel(row.model, row.codename), verdict: row.verdict ?? null, offline: row.verdict === null || row.verdict === undefined ? null : row.offline === 1 }));
 }
 
@@ -348,7 +366,17 @@ async function player(url, env) {
   const votes = (await env.DB.prepare(`${SELECT(table)} WHERE voter = ? ORDER BY updated DESC, app_id`).bind(voter).all()).results;
   const reports = await reportRows(environment, " WHERE r.voter = ?", [voter], env);
   const [named] = (await env.DB.prepare(`SELECT label FROM ${LABEL_TABLES[environment]} WHERE voter = ?`).bind(voter).all()).results;
-  return json(200, { voter, label: named?.label ?? null, votes: votes.map((row) => ({ ...row, offline: row.offline === 1, deviceName: deviceLabel(row.model, row.codename) })), reports });
+  // With no name from the developer, the Discord name the player typed stands in for it; the developer's name wins.
+  let shown = named?.label ?? null;
+  if (!shown) {
+    try {
+      const [typed] = (await env.DB.prepare(`SELECT discord FROM ${CONTACT_TABLES[environment]} WHERE voter = ?`).bind(voter).all()).results;
+      shown = typed?.discord ?? null;
+    } catch {
+      // No table for it yet (migration 0022).
+    }
+  }
+  return json(200, { voter, label: shown, votes: votes.map((row) => ({ ...row, offline: row.offline === 1, deviceName: deviceLabel(row.model, row.codename) })), reports });
 }
 
 /** Gives a player a name (or takes it away with an empty one). The name stays in the developer's database and in the console: it is not written in the journal. */

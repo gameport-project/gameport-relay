@@ -487,6 +487,28 @@ describe("the reports", () => {
     assert.deepEqual(byDay["2026-10-10"], [null, null]);
   });
 
+  it("names a player by what the developer wrote, else by the Discord name they typed, on every answer and report of theirs", async () => {
+    vote(5, "aaaaaaaaaaaa");
+    vote(5, "bbbbbbbbbbbb");
+    vote(6, "aaaaaaaaaaaa");
+    report("reports", 5, "aaaaaaaaaaaa", "2026-10-08");
+    report("reports", 5, "bbbbbbbbbbbb", "2026-10-09");
+    // The name is kept once per player: it shows on every game they answered, not on the one it was given with.
+    db.prepare("INSERT INTO player_contacts (voter, discord, updated) VALUES ('aaaaaaaaaaaa', 'typed.by.player', '2026-10-08'), ('bbbbbbbbbbbb', 'typed.too', '2026-10-09')").run();
+    db.prepare("INSERT INTO player_labels (voter, label, updated) VALUES ('bbbbbbbbbbbb', 'Mine', '2026-10-09')").run();
+    // In the list of reports.
+    const { reports } = await (await ask("/console/api/reports?env=prod&appId=5")).json();
+    assert.deepEqual(Object.fromEntries(reports.map((r) => [r.voter, r.label])), { aaaaaaaaaaaa: "typed.by.player", bbbbbbbbbbbb: "Mine" });
+    // In the votes of each game: the same names, the developer's first.
+    const five = (await (await ask("/console/api/votes?env=prod&appId=5")).json()).votes;
+    assert.deepEqual(Object.fromEntries(five.map((v) => [v.voter, v.label])), { aaaaaaaaaaaa: "typed.by.player", bbbbbbbbbbbb: "Mine" });
+    const six = (await (await ask("/console/api/votes?env=prod&appId=6")).json()).votes;
+    assert.deepEqual(six.map((v) => v.label), ["typed.by.player"]);
+    // On the page of the player.
+    assert.equal((await (await ask("/console/api/player?env=prod&voter=aaaaaaaaaaaa")).json()).label, "typed.by.player");
+    assert.equal((await (await ask("/console/api/player?env=prod&voter=bbbbbbbbbbbb")).json()).label, "Mine");
+  });
+
   it("lists the reports of a game, or the latest of every game, without the zips, newest first", async () => {
     report("reports", 5, "aaaaaaaaaaaa", "2026-10-08");
     report("reports", 5, "bbbbbbbbbbbb", "2026-10-10", "pico");

@@ -385,6 +385,27 @@ describe("the reports", () => {
     assert.equal(count("votes"), 0);
   });
 
+  it("keeps the Discord name once per player, cleaned, and an empty name takes it away", async () => {
+    const give = (discord) => worker.fetch(post(goodMessage(discord === undefined ? {} : { discord })), env);
+    const kept = () => db.prepare("SELECT discord FROM player_contacts").all().map((row) => row.discord);
+    assert.equal((await give("  @Some.Name<b> ")).status, 204);
+    assert.deepEqual(kept(), ["Some.Nameb"]);
+    // A name that is too long is cut; neither it nor a bad one is ever a reason to lose the answer.
+    assert.equal((await give("x".repeat(80))).status, 204);
+    assert.deepEqual(kept(), ["x".repeat(40)]);
+    // An app that says nothing about it leaves what was kept.
+    assert.equal((await give(undefined)).status, 204);
+    assert.deepEqual(kept(), ["x".repeat(40)]);
+    // One that holds only what is cleaned away, or nothing, takes the name away.
+    assert.equal((await give(" @<> ")).status, 204);
+    assert.deepEqual(kept(), []);
+    assert.equal((await give("kept.name")).status, 204);
+    assert.equal((await give("")).status, 204);
+    assert.deepEqual(kept(), []);
+    // Nothing of it reaches the votes.
+    assert.throws(() => db.prepare("SELECT discord FROM votes").all());
+  });
+
   it("never stores the raw voter id, nor the address", async () => {
     await worker.fetch(new Request(`https://relay.example.invalid/report?${query()}`, { method: "POST", body: ZIP, headers: { "CF-Connecting-IP": "203.0.113.9" } }), env);
     const row = db.prepare("SELECT * FROM reports").get();
@@ -1110,6 +1131,29 @@ describe("how steadily a game ran", () => {
     await send(env, 2, { perf: perf(540) });
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM votes WHERE perf_seconds = 600").get().n, 1);
     assert.doesNotThrow(() => db.prepare("SELECT perf_held FROM votes_test").all());
+  });
+
+  it("migration 0022 moves the Discord name from the history of the answers to the table of the players, and drops the two columns", () => {
+    const db = new DatabaseSync(":memory:");
+    // The database as an earlier version of the migration left it: the two columns on the history of the answers, no table of contacts.
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/CREATE TABLE IF NOT EXISTS player_contacts(_test)? \([^)]*\);/g, ""));
+    db.exec("ALTER TABLE vote_history ADD COLUMN discord TEXT; ALTER TABLE vote_history ADD COLUMN code TEXT; ALTER TABLE vote_history_test ADD COLUMN discord TEXT; ALTER TABLE vote_history_test ADD COLUMN code TEXT;");
+    // The views of the last answers name the two columns too, as they do on the real database.
+    db.exec("DROP VIEW votes; DROP VIEW votes_test;");
+    for (const [view, history] of [["votes", "vote_history"], ["votes_test", "vote_history_test"]]) {
+      db.exec(`CREATE VIEW ${view} AS SELECT app_id, voter, verdict, app, game, device, offline, updated, fixed, fixed_in, voted_at, issues, model, codename, report_state, perf_seconds, perf_held, perf_target, discord, code FROM ${history} WHERE id IN (SELECT MAX(id) FROM ${history} GROUP BY app_id, voter)`);
+    }
+    db.exec(`INSERT INTO vote_history (app_id, voter, verdict, app, device, updated, discord, code) VALUES
+      (5, 'aaaaaaaaaaaa', 'fails', '0.9.4', 'quest', '2026-11-04', 'old.name', 'B40C70'),
+      (6, 'aaaaaaaaaaaa', 'fails', '0.9.4', 'quest', '2026-11-05', 'new.name', 'B40C70'),
+      (5, 'bbbbbbbbbbbb', 'works', '0.9.4', 'quest', '2026-11-05', NULL, NULL)`);
+    db.exec(readFileSync(new URL("./migrations/0022_player_contacts.sql", import.meta.url), "utf8"));
+    // One name per player: the latest one given.
+    assert.deepEqual(db.prepare("SELECT voter, discord FROM player_contacts").all().map((row) => ({ ...row })), [{ voter: "aaaaaaaaaaaa", discord: "new.name" }]);
+    assert.doesNotThrow(() => db.prepare("SELECT discord FROM player_contacts_test").all());
+    assert.throws(() => db.prepare("SELECT discord FROM vote_history").all());
+    assert.throws(() => db.prepare("SELECT code FROM vote_history_test").all());
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM votes").get().n, 3);
   });
 });
 

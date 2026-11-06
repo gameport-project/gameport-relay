@@ -59,6 +59,8 @@ export function validate(message) {
   if (model) vote.model = model;
   if (codename) vote.codename = codename;
   if (message.game !== undefined) vote.game = message.game;
+  // The Discord name the player chose to give, to talk about their answers: present (empty when they have none or took it away) or absent for an app that does not say. Never a reason to lose the vote.
+  if (typeof message.discord === "string") vote.discord = cleanDiscordName(message.discord) ?? "";
   // "Worked offline" only means something for a game that worked: a vote that says it did not work never carries it.
   vote.offline = message.offline === true && message.verdict === "works";
   // What went wrong only means something for an answer that says something did; a code this version does not know (a newer app) is left out, not refused.
@@ -121,6 +123,18 @@ export function validateReportMeta(params) {
   return { meta: { appId, app, device, voter, ...(VERDICTS.has(answer) ? { answer } : {}) } };
 }
 
+const MAX_DISCORD_NAME = 40;
+
+/**
+ * The Discord name a player typed, made safe to keep and to show: no control character or angle bracket, no leading "@", at most 40 characters. Null when nothing is left. It is
+ * text the player chose to give, to talk about a report: it is never a reason to refuse the report, and nothing checks that it belongs to them.
+ */
+export function cleanDiscordName(raw) {
+  if (typeof raw !== "string") return null;
+  const name = raw.replace(/[\u0000-\u001f\u007f<>]/g, "").trim().replace(/^@+/, "").trim().slice(0, MAX_DISCORD_NAME).trim();
+  return name.length > 0 ? name : null;
+}
+
 /** A zip starts with "PK\x03\x04": anything else is not a report. */
 export function looksLikeZip(bytes) {
   return bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
@@ -180,6 +194,8 @@ const upsert = (table, level = 3) => `INSERT INTO ${table} (app_id, voter, verdi
 
 // Where each set of votes is written: every answer is a line of its history; what is read is the view of the same name as the set (the last line of each player and game).
 export const HISTORY = { votes: "vote_history", votes_test: "vote_history_test" };
+// The Discord name each player typed, for the same two sets: read by the console only.
+export const CONTACTS = { votes: "player_contacts", votes_test: "player_contacts_test" };
 
 /**
  * Records an answer in the history of the player for the game: a new line when the answer, the version of GamePort or the build of the game is not what the last line says, else the
@@ -209,6 +225,20 @@ async function recordVote(env, table, values, issues, checked) {
     }
   }
   return false;
+}
+
+/**
+ * Keeps the Discord name the player typed, one per player (not per game): every answer that carries one renews it, an empty one takes it away. It goes in a table of its own that only
+ * the console reads, never in the votes the site and the totals are made from. A database that has not had migration 0022 has no such table: nothing is kept, and the answer is never lost for it.
+ */
+async function saveContact(env, table, voter, discord) {
+  const contacts = CONTACTS[table];
+  try {
+    if (discord === "") await env.DB.prepare(`DELETE FROM ${contacts} WHERE voter = ?`).bind(voter).run();
+    else await env.DB.prepare(`INSERT INTO ${contacts} (voter, discord, updated) VALUES (?, ?, ?) ON CONFLICT (voter) DO UPDATE SET discord = excluded.discord, updated = excluded.updated`).bind(voter, discord, new Date().toISOString().slice(0, 10)).run();
+  } catch {
+    // No table for it yet.
+  }
 }
 
 /** The relay's own clock, UTC, rounded down to the hour: the app never sends a time, and none of a player's is used. */
@@ -263,6 +293,7 @@ async function vote(request, env, table, ctx) {
   }
   // What the database said stays here: the player only learns that it did not work.
   if (!saved) return reply(500, { error: "not saved" });
+  if (checked.discord !== undefined) await saveContact(env, table, voter, checked.discord);
   // Each set tells its own channel: the real votes the real one, the test set the one for tries.
   if (table === "votes" || table === "votes_test") notifyVote(env, ctx, new URL(request.url).origin, checked, table === "votes" ? "prod" : "test", voter);
   return reply(204);

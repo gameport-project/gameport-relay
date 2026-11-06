@@ -133,6 +133,20 @@ CREATE TABLE IF NOT EXISTS player_labels_test (
   updated TEXT NOT NULL
 );
 
+-- The Discord name a player chose to type in the app, to talk about their answers on the project's Discord: one per hashed player (not per game), renewed by every answer that carries one.
+-- Only the console reads it (it shows it as the player's name when the developer gave none); the site, the totals and every public route never do.
+CREATE TABLE IF NOT EXISTS player_contacts (
+  voter   TEXT PRIMARY KEY,  -- the same short salted hash as in votes
+  discord TEXT NOT NULL,     -- typed by the player, cleaned, not checked
+  updated TEXT NOT NULL      -- the day, YYYY-MM-DD
+);
+
+CREATE TABLE IF NOT EXISTS player_contacts_test (
+  voter   TEXT PRIMARY KEY,
+  discord TEXT NOT NULL,
+  updated TEXT NOT NULL
+);
+
 -- A report of more than 600 000 bytes is cut into parts, each stored as base64 in a row of its own (a row holds 2 MB at most); its row in reports then has an empty data.
 CREATE TABLE IF NOT EXISTS report_parts (
   report_id INTEGER NOT NULL,  -- the id of the report in reports
