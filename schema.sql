@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS vote_history (
   report_state TEXT,         -- what became of the report the app sent just before the answer: sent, waiting, refused or none; empty for the answers saved before it existed, and for "it worked"
   perf_seconds INTEGER,      -- seconds of play the hook could measure (session in focus, after its first minute): at least 180, else empty; sent only with the player's agreement
   perf_held INTEGER,         -- how many of those seconds reached the frame rate the screen asked for with few old frames shown again
-  perf_target INTEGER        -- that frame rate (72, 90, 120)
+  perf_target INTEGER,       -- that frame rate (72, 90, 120)
+  first_day TEXT             -- the day this line began (YYYY-MM-DD, UTC); `updated` moves forward when the same answer is renewed, this one does not; empty for the lines made before it existed (then `updated` stands in)
 );
 CREATE INDEX IF NOT EXISTS vote_history_player ON vote_history (app_id, voter, id);
 CREATE VIEW IF NOT EXISTS votes AS SELECT app_id, voter, verdict, app, game, device, offline, updated, fixed, fixed_in, voted_at, issues, model, codename, report_state, perf_seconds, perf_held, perf_target FROM vote_history WHERE id IN (SELECT MAX(id) FROM vote_history GROUP BY app_id, voter);
@@ -44,7 +45,8 @@ CREATE TABLE IF NOT EXISTS vote_history_test (
   report_state TEXT,         -- what became of the report the app sent just before the answer: sent, waiting, refused or none; empty for the answers saved before it existed, and for "it worked"
   perf_seconds INTEGER,      -- seconds of play the hook could measure (session in focus, after its first minute): at least 180, else empty; sent only with the player's agreement
   perf_held INTEGER,         -- how many of those seconds reached the frame rate the screen asked for with few old frames shown again
-  perf_target INTEGER        -- that frame rate (72, 90, 120)
+  perf_target INTEGER,       -- that frame rate (72, 90, 120)
+  first_day TEXT             -- the day this line began (YYYY-MM-DD, UTC); `updated` moves forward when the same answer is renewed, this one does not; empty for the lines made before it existed (then `updated` stands in)
 );
 CREATE INDEX IF NOT EXISTS vote_history_test_player ON vote_history_test (app_id, voter, id);
 CREATE VIEW IF NOT EXISTS votes_test AS SELECT app_id, voter, verdict, app, game, device, offline, updated, fixed, fixed_in, voted_at, issues, model, codename, report_state, perf_seconds, perf_held, perf_target FROM vote_history_test WHERE id IN (SELECT MAX(id) FROM vote_history_test GROUP BY app_id, voter);

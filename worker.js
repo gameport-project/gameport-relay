@@ -218,6 +218,7 @@ async function recordVote(env, table, values, issues, checked) {
       } else {
         await env.DB.prepare(`INSERT INTO ${history} (app_id, voter, verdict, app, game, device, offline, updated, voted_at, issues, model, codename, report_state${withPerf ? ", perf_seconds, perf_held, perf_target" : ""}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${withPerf ? ", ?, ?, ?" : ""})`)
           .bind(appId, voter, verdict, app, game, device, offline, today, hour, ...more, ...(withPerf ? perf : [])).run();
+        await markFirstDay(env, history, appId, voter, today);
       }
       return true;
     } catch {
@@ -225,6 +226,18 @@ async function recordVote(env, table, values, issues, checked) {
     }
   }
   return false;
+}
+
+/**
+ * The day a line of the history began: kept apart from `updated`, which a renewed answer moves forward, so the first sight of a player on a version and the day an answer was
+ * first given stay known. A database that has not had migration 0023 has no such column: nothing is kept, and the answer is never lost for it.
+ */
+async function markFirstDay(env, history, appId, voter, today) {
+  try {
+    await env.DB.prepare(`UPDATE ${history} SET first_day = ? WHERE id = (SELECT MAX(id) FROM ${history} WHERE app_id = ? AND voter = ?)`).bind(today, appId, voter).run();
+  } catch {
+    // No column for it yet.
+  }
 }
 
 /**

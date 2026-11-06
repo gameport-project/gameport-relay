@@ -406,6 +406,17 @@ describe("the reports", () => {
     assert.throws(() => db.prepare("SELECT discord FROM votes").all());
   });
 
+  it("keeps the day a line began, and a renewed answer does not move it", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    assert.equal((await worker.fetch(post(goodMessage()), env)).status, 204);
+    assert.equal(db.prepare("SELECT first_day FROM vote_history").get().first_day, today);
+    // The line is old: the same answer again renews it (its day moves to today) and keeps the day it began.
+    db.prepare("UPDATE vote_history SET first_day = '2026-10-01', updated = '2026-10-01'").run();
+    assert.equal((await worker.fetch(post(goodMessage()), env)).status, 204);
+    assert.deepEqual({ ...db.prepare("SELECT first_day, updated FROM vote_history").get() }, { first_day: "2026-10-01", updated: today });
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM vote_history").get().n, 1);
+  });
+
   it("never stores the raw voter id, nor the address", async () => {
     await worker.fetch(new Request(`https://relay.example.invalid/report?${query()}`, { method: "POST", body: ZIP, headers: { "CF-Connecting-IP": "203.0.113.9" } }), env);
     const row = db.prepare("SELECT * FROM reports").get();
@@ -1053,7 +1064,7 @@ describe("how steadily a game ran", () => {
   const beforeMigration = () => {
     const db = new DatabaseSync(":memory:");
     const schema = readFileSync(new URL("./schema.sql", import.meta.url), "utf8")
-      .replaceAll(/report_state TEXT,( +--[^\n]*)\n( +perf_[^\n]*\n)+\);/g, "report_state TEXT$1\n);")
+      .replaceAll(/report_state TEXT,( +--[^\n]*)\n( +(?:perf_|first_day)[^\n]*\n)+\);/g, "report_state TEXT$1\n);")
       .replaceAll(", perf_seconds, perf_held, perf_target", "");
     db.exec(schema);
     return { db, env: { DB: d1(db), VOTER_SALT: "salt" } };
@@ -1154,6 +1165,21 @@ describe("how steadily a game ran", () => {
     assert.throws(() => db.prepare("SELECT discord FROM vote_history").all());
     assert.throws(() => db.prepare("SELECT code FROM vote_history_test").all());
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM votes").get().n, 3);
+  });
+});
+
+describe("migration 0023, the day a line began", () => {
+  it("adds the column to both histories and gives the lines their day as a best guess", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8").replaceAll(/,( +--[^\n]*)\n +first_day TEXT[^\n]*\n\);/g, "$1\n);"));
+    assert.throws(() => db.prepare("SELECT first_day FROM vote_history").all());
+    db.exec("INSERT INTO vote_history (app_id, voter, verdict, app, device, updated) VALUES (5, 'aaaaaaaaaaaa', 'works', '0.9.4', 'quest', '2026-11-05')");
+    db.exec("INSERT INTO vote_history_test (app_id, voter, verdict, app, device, updated) VALUES (5, 'aaaaaaaaaaaa', 'works', '0.9.4', 'quest', '2026-11-04')");
+    db.exec(readFileSync(new URL("./migrations/0023_first_day.sql", import.meta.url), "utf8"));
+    assert.equal(db.prepare("SELECT first_day FROM vote_history").get().first_day, "2026-11-05");
+    assert.equal(db.prepare("SELECT first_day FROM vote_history_test").get().first_day, "2026-11-04");
+    // The views do not list the column, so they still read.
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM votes").get().n, 1);
   });
 });
 
