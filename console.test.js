@@ -225,11 +225,13 @@ describe("adding a vote", () => {
     assert.deepEqual(await summary(), []);
   });
 
-  it("lets the developer give the version of GamePort of a vote he adds, and says admin when he gives none", async () => {
+  it("lets the developer give the version of GamePort of a vote he adds, and takes the newest release when he gives none", async () => {
     const add = (extra) => ask("/console/api/add", { method: "POST", body: { env: "prod", appId: 7, device: "pico", verdict: "works", ...extra } });
+    // With no release among the answers yet there is nothing to take: "admin" is the last resort.
+    assert.equal((await add({})).status, 200);
     assert.equal((await add({ app: "0.8.1" })).status, 200);
     assert.equal((await add({})).status, 200);
-    assert.deepEqual(rows().map((r) => r.app).sort(), ["0.8.1", "admin"]);
+    assert.deepEqual(rows().map((r) => r.app).sort(), ["0.8.1", "0.8.1", "admin"]);
     for (const app of ["<script>", "x".repeat(33), 7, ""].slice(0, 3)) assert.equal((await add({ app })).status, 400, String(app));
   });
 
@@ -737,6 +739,143 @@ describe("the players", () => {
     assert.equal((await ask("/console/prod/player/AAAAAAAAAAAA")).status, 404);
     assert.equal((await ask("/console/prod/player/aaaaaaaaaaa")).status, 404);
     assert.equal((await ask("/console/prod/player/")).status, 404);
+  });
+
+  it("serves the page at the address of a version and of a device, and only for a plausible one", async () => {
+    assert.equal((await ask("/console/prod/version/0.9.4")).status, 200);
+    assert.equal((await ask("/console/test/version/0.9.4-alpha.12")).status, 200);
+    assert.equal((await ask("/console/prod/version/latest")).status, 404);
+    assert.equal((await ask("/console/prod/device/Meta%20Quest%203")).status, 200);
+    assert.equal((await ask("/console/prod/device/Pico%20Space%20Pro")).status, 200);
+    assert.equal((await ask("/console/prod/device/")).status, 404);
+    assert.equal((await ask("/console/prod/device/a/b")).status, 404);
+  });
+
+  it("lists every answer and report of one version of GamePort, with the name of each player", async () => {
+    vote(5, "aaaaaaaaaaaa", { app: "0.9.1", verdict: "works" });
+    vote(6, "bbbbbbbbbbbb", { app: "0.9.1", verdict: "fails" });
+    vote(5, "cccccccccccc", { app: "0.9.4" });
+    db.prepare("INSERT INTO player_labels (voter, label, updated) VALUES ('bbbbbbbbbbbb', 'Mine', '2026-10-09')").run();
+    db.prepare("INSERT INTO reports (app_id, voter, app, device, size, data, updated) VALUES (6, 'bbbbbbbbbbbb', '0.9.1', 'quest', 1, 'x', '2026-10-09'), (5, 'cccccccccccc', '0.9.4', 'quest', 1, 'x', '2026-10-09')").run();
+    const data = await (await ask("/console/api/version?env=prod&app=0.9.1")).json();
+    assert.equal(data.app, "0.9.1");
+    assert.deepEqual(data.votes.map((v) => [v.voter, v.label, v.verdict]).sort(), [["aaaaaaaaaaaa", null, "works"], ["bbbbbbbbbbbb", "Mine", "fails"]]);
+    assert.deepEqual(data.reports.map((r) => r.voter), ["bbbbbbbbbbbb"]);
+    assert.deepEqual((await (await ask("/console/api/version?env=prod&app=0.8.0")).json()).votes, []);
+    assert.deepEqual(data.changes, []);
+    assert.equal((await ask("/console/api/version?env=prod&app=x")).status, 400);
+    assert.equal((await ask("/console/api/version?env=other&app=0.9.1")).status, 400);
+  });
+
+  it("lists every answer and report of one device, by the name the console gives it", async () => {
+    vote(5, "aaaaaaaaaaaa", { model: "Quest 3", codename: "eureka" });
+    vote(6, "bbbbbbbbbbbb", { model: null, codename: "eureka" });
+    vote(5, "cccccccccccc", { model: "Quest 2", codename: "hollywood" });
+    vote(5, "dddddddddddd", { device: "pico", model: "B3110", codename: "swan" });
+    vote(5, "eeeeeeeeeeee", { device: "phone", model: "ZZ-UNKNOWN", codename: "nope" });
+    vote(5, "ffffffffffff", { device: "pico" });
+    db.prepare("INSERT INTO reports (app_id, voter, app, device, size, data, updated) VALUES (5, 'aaaaaaaaaaaa', '0.9.4', 'quest', 1, 'x', '2026-10-09'), (5, 'cccccccccccc', '0.9.4', 'quest', 1, 'x', '2026-10-09')").run();
+    const voters = async (name) => (await (await ask(`/console/api/device?env=prod&name=${encodeURIComponent(name)}`)).json());
+    // Two spellings of one device (model and codename, or the codename alone) are one page.
+    assert.deepEqual((await voters("Meta Quest 3")).votes.map((v) => v.voter).sort(), ["aaaaaaaaaaaa", "bbbbbbbbbbbb"]);
+    assert.deepEqual((await voters("Meta Quest 3")).reports.map((r) => r.voter), ["aaaaaaaaaaaa"]);
+    assert.deepEqual((await voters("Pico Space Pro")).votes.map((v) => v.voter), ["dddddddddddd"]);
+    // A device the list does not know is its raw model, and one with no model is its kind.
+    assert.deepEqual((await voters("ZZ-UNKNOWN")).votes.map((v) => v.voter), ["eeeeeeeeeeee"]);
+    assert.deepEqual((await voters("pico")).votes.map((v) => v.voter), ["ffffffffffff"]);
+    assert.deepEqual((await voters("Meta Quest Pro")).votes, []);
+    assert.equal((await ask("/console/api/device?env=prod&name=%3Cscript%3E")).status, 400);
+  });
+
+  it("gives the numbers of the home: days, evolution, best players, devices, versions and the changes of the week", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const line = (appId, voter, verdict, app, model = "Quest 3", codename = "eureka") => db.prepare("INSERT INTO vote_history (app_id, voter, verdict, app, device, offline, updated, model, codename) VALUES (?, ?, ?, ?, 'quest', 0, ?, ?, ?)").run(appId, voter, verdict, app, today, model, codename);
+    line(5, "aaaaaaaaaaaa", "works", "0.9.0");
+    line(5, "aaaaaaaaaaaa", "fails", "0.9.4");
+    line(6, "aaaaaaaaaaaa", "works", "0.9.4");
+    line(6, "bbbbbbbbbbbb", "fails", "0.9.4", "B3110", "swan");
+    db.prepare("INSERT INTO player_labels (voter, label, updated) VALUES ('aaaaaaaaaaaa', 'Mine', '2026-10-09')").run();
+    const data = await (await ask("/console/api/home?env=prod")).json();
+    assert.equal(data.today, today);
+    assert.equal(data.daily.length, 62);
+    assert.deepEqual(data.daily.at(-1), { day: today, answers: 4, newPlayers: 2, reports: 0 });
+    assert.equal(data.evolution.length, 31);
+    assert.equal(data.evolution.at(-1).works + data.evolution.at(-1).offline_only + data.evolution.at(-1).fails, 2);
+    assert.deepEqual(data.topPlayers[0], { voter: "aaaaaaaaaaaa", games: 2, works: 1, offline_only: 0, fails: 1, devices: ["Meta Quest 3"], answers: 3, reports: 0, label: "Mine" });
+    assert.deepEqual(Object.keys(data.evolutionByDevice).sort(), ["Meta Quest 3", "Pico Space Pro", "kind:quest"]);
+    assert.equal(data.evolutionByDevice["Pico Space Pro"].length, 31);
+    assert.deepEqual(data.adoption[14].map((v) => v.app), ["0.9.4", "0.9.0"]);
+    assert.deepEqual(Object.keys(data.adoption), ["7", "14", "31"]);
+    assert.deepEqual(data.devices.map((d) => d.name), ["Meta Quest 3", "Pico Space Pro"]);
+    // The kind of each device is the one its answers came with (this test sends every answer as "quest").
+    assert.deepEqual(data.devices.map((d) => d.kind), ["quest", "quest"]);
+    assert.deepEqual(data.versions, [{ app: "0.9.4", players: 2 }]);
+    assert.deepEqual(data.changes.map((c) => [c.appId, c.kind]), [[5, "regression"]]);
+    assert.equal(data.waiting, 0);
+    assert.equal((await ask("/console/api/home?env=other")).status, 400);
+  });
+
+  it("tells a vote added without a version to come from the newest release, never from admin", async () => {
+    // Releases and test builds among the answers kept: the newest release is 0.9.4, whatever the order they came in.
+    vote(5, "aaaaaaaaaaaa", { app: "0.9.4" });
+    vote(5, "bbbbbbbbbbbb", { app: "0.9.10" });
+    vote(5, "cccccccccccc", { app: "0.9.11-alpha.2" });
+    vote(5, "dddddddddddd", { app: "admin" });
+    const add = (extra = {}) => ask("/console/api/add", { method: "POST", body: { env: "prod", appId: 9, verdict: "works", device: "quest", ...extra } });
+    assert.equal((await add()).status, 200);
+    assert.equal((await add({ app: "0.9.0" })).status, 200);
+    const apps = db.prepare("SELECT app FROM vote_history WHERE app_id = 9 ORDER BY id").all().map((row) => row.app);
+    assert.deepEqual(apps, ["0.9.10", "0.9.0"]);
+  });
+
+  it("counts the same games as the list on the left: the chart by kind of device ends on what the list's filters give", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const line = (appId, voter, verdict, device, extra = {}) => db.prepare("INSERT INTO vote_history (app_id, voter, verdict, app, device, offline, updated, fixed, model, codename) VALUES (?, ?, ?, '0.9.4', ?, ?, ?, ?, ?, ?)").run(appId, voter, verdict, device, extra.offline ? 1 : 0, today, extra.fixed ?? null, extra.model ?? null, extra.codename ?? null);
+    line(1, "aaaaaaaaaaaa", "works", "quest", { model: "Quest 3", codename: "eureka" });
+    line(1, "bbbbbbbbbbbb", "works", "quest", { offline: true });
+    line(2, "aaaaaaaaaaaa", "fails", "quest", { model: "Quest 3", codename: "eureka" });
+    line(2, "bbbbbbbbbbbb", "works", "quest");
+    line(3, "aaaaaaaaaaaa", "fails", "quest", { fixed: today });
+    line(4, "aaaaaaaaaaaa", "offline_only", "quest");
+    line(5, "aaaaaaaaaaaa", "fails", "pico");
+    line(6, "cccccccccccc", "works", "pico");
+    // What the list on the left does: the counts of the public summary for the kind of device, then the answer most of them give (a tie goes to the more careful one).
+    const games = await summary("/summary");
+    const left = (kind) => {
+      const tally = { works: 0, offline_only: 0, fails: 0 };
+      for (const game of games) {
+        const c = game.devices?.[kind];
+        if (!c || c.works + c.offlineOnly + c.fails === 0) continue;
+        tally[c.fails >= c.works && c.fails >= c.offlineOnly ? "fails" : c.offlineOnly >= c.works ? "offline_only" : "works"]++;
+      }
+      return tally;
+    };
+    const data = await (await ask("/console/api/home?env=prod")).json();
+    for (const kind of ["quest", "pico"]) {
+      const { day, ...chart } = data.evolutionByDevice[`kind:${kind}`].at(-1);
+      assert.deepEqual(chart, left(kind), kind);
+    }
+    // All devices: the list's own counts for each game.
+    const everything = { works: 0, offline_only: 0, fails: 0 };
+    for (const game of games) everything[game.fails >= game.works && game.fails >= game.offlineOnly ? "fails" : game.offlineOnly >= game.works ? "offline_only" : "works"]++;
+    const { day: lastDay, ...all } = data.evolution.at(-1);
+    assert.deepEqual(all, everything, "all devices");
+  });
+
+  it("tells the moves of the players between versions, on the page of a version and of a device", async () => {
+    const line = (appId, voter, verdict, app, game, model = "Quest 3", codename = "eureka") => db.prepare("INSERT INTO vote_history (app_id, voter, verdict, app, game, device, offline, updated, model, codename) VALUES (?, ?, ?, ?, ?, 'quest', 0, '2026-10-08', ?, ?)").run(appId, voter, verdict, app, game, model, codename);
+    line(5, "aaaaaaaaaaaa", "works", "0.9.0", "1.0");
+    line(5, "aaaaaaaaaaaa", "fails", "0.9.1", "1.0");
+    line(6, "bbbbbbbbbbbb", "fails", "0.9.1", null);
+    line(6, "bbbbbbbbbbbb", "works", "0.9.4", "2.0");
+    line(7, "cccccccccccc", "works", "0.9.0", null, "A92Y0", "sparrow");
+    line(7, "cccccccccccc", "fails", "0.9.4", null, "A92Y0", "sparrow");
+    const on = async (path) => (await (await ask(path)).json()).changes.map((c) => [c.appId, c.from, c.to, c.kind, c.game]).sort();
+    // The version 0.9.1: one move arrived on it, one left it.
+    assert.deepEqual(await on("/console/api/version?env=prod&app=0.9.1"), [[5, "0.9.0", "0.9.1", "regression", "same"], [6, "0.9.1", "0.9.4", "improvement", "unknown"]]);
+    // The Quest 3 holds two moves, the Pico Space Pro's is not in it.
+    assert.deepEqual(await on("/console/api/device?env=prod&name=Meta%20Quest%203"), [[5, "0.9.0", "0.9.1", "regression", "same"], [6, "0.9.1", "0.9.4", "improvement", "unknown"]]);
+    assert.deepEqual(await on("/console/api/device?env=prod&name=Pico%204%20Ultra"), [[7, "0.9.0", "0.9.4", "regression", "unknown"]]);
   });
 });
 

@@ -7,6 +7,9 @@
 //  - What a route reads and writes is chosen by the route, from two names written here, never from a message.
 // Without the three secrets (ACCESS_TEAM, ACCESS_AUD, ADMIN_EMAIL), nothing here answers: every route is a 404, as if it did not exist.
 
+import { changesOf } from "./changes.js";
+import { adoptionOf, dailyOf, daysEndingOn, devicesOf, evolutionOf, recentChanges, topGamesOf, topPlayersOf, versionsOf } from "./stats.js";
+import { compareVersions } from "./turns.js";
 import { DEVICE_CHOICES, deviceLabel, knownModel, searchModels } from "./device_names.js";
 import { ISSUE_SET } from "./issues.js";
 import { consolePage } from "./console_page.js";
@@ -101,6 +104,12 @@ export function checkVote(message, { partial }) {
 }
 
 const validId = (appId) => Number.isInteger(appId) && appId >= 1 && appId <= MAX_APP_ID;
+const validVersion = (version) => typeof version === "string" && /^\d{1,3}\.\d{1,3}\.\d{1,3}(-alpha\.\d{1,5})?$/.test(version);
+const MAX_GROUP_VOTES = 1000;
+const MAX_HISTORY_LINES = 20000;
+// A device is known by its name; the spellings (model and codename) that share it are few.
+const MAX_DEVICE_SPELLINGS = 30;
+const validDeviceName = (name) => typeof name === "string" && /^[\w %.\-]{1,80}$/.test(name);
 const validVoter = (voter) => typeof voter === "string" && /^[0-9a-f]{12}$/.test(voter);
 /** A name for a player: one line of text, no markup and no control character. Returns the trimmed text, or null. */
 const checkLabel = (text) => {
@@ -188,16 +197,16 @@ async function add(message, env, table, environment, ctx, origin) {
   const voter = await voterHash(random, env.VOTER_SALT);
   const today = new Date().toISOString().slice(0, 10);
   const offline = fields.offline === true && fields.verdict === "works" ? 1 : 0;
-  // The version of GamePort the vote is told to come from, typed by the developer; "admin" when none is given.
+  // The version of GamePort the vote is told to come from, typed by the developer; when none is given it is the newest release seen (never "admin", unless there is no release yet).
   if (message.app !== undefined && (typeof message.app !== "string" || !/^[0-9A-Za-z._-]{1,32}$/.test(message.app))) return json(400, { error: "bad app" });
   // What the developer says went wrong, from the same fixed list as the app's: only for an answer that says something did.
   if (message.issues !== undefined && (!Array.isArray(message.issues) || message.issues.some((code) => typeof code !== "string" || !ISSUE_SET.has(code)))) return json(400, { error: "bad issues" });
   const issues = fields.verdict === "works" ? [] : [...new Set(message.issues ?? [])];
-  const app = message.app || "admin";
+  const app = message.app || (await newestRelease(env, table)) || "admin";
   await env.DB.prepare(`INSERT INTO ${HISTORY[table]} (app_id, voter, verdict, app, game, device, offline, updated, voted_at, issues, model, codename) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(message.appId, voter, fields.verdict, app, null, fields.device, offline, today, thisHour(), issues.length ? issues.join(",") : null, deviceName(message.model), deviceName(message.codename)).run();
   log("add", { env: environment, appId: message.appId, voter, verdict: fields.verdict, device: fields.device });
-  // Told like a player's vote, so the channel can be tried from here; it says the version typed here, or "admin" when none, where a player's says the version of GamePort.
+  // Told like a player's vote, so the channel can be tried from here; it says the version typed here, or the newest release when none, where a player's says the version of GamePort.
   notifyVote(env, ctx, origin, { appId: message.appId, verdict: fields.verdict, device: fields.device, offline: offline === 1, app, issues }, environment, voter);
   return json(200, { voter });
 }
@@ -377,6 +386,148 @@ async function player(url, env) {
     }
   }
   return json(200, { voter, label: shown, votes: votes.map((row) => ({ ...row, offline: row.offline === 1, deviceName: deviceLabel(row.model, row.codename) })), reports });
+}
+
+/** The answers that match [where] (about the alias v), newest first, each with the name of its player: the developer's, else the Discord name the player typed. */
+async function votesWhere(environment, where, binds, env) {
+  const table = TABLES[environment];
+  const labels = LABEL_TABLES[environment];
+  const contacts = CONTACT_TABLES[environment];
+  const read = (withContact) => env.DB.prepare(
+    `SELECT v.app_id AS appId, v.voter, v.verdict, v.app, v.game, v.device, v.offline, v.updated, v.fixed, v.fixed_in AS fixedIn, v.issues, v.model, v.codename, v.report_state AS reportState, ` +
+    `${withContact ? "COALESCE(l.label, c.discord)" : "l.label"} AS label FROM ${table} v LEFT JOIN ${labels} l ON l.voter = v.voter ${withContact ? `LEFT JOIN ${contacts} c ON c.voter = v.voter ` : ""}` +
+    `WHERE ${where} ORDER BY v.updated DESC, v.app_id, v.voter LIMIT ${MAX_GROUP_VOTES}`,
+  ).bind(...binds).all();
+  let rows;
+  try {
+    rows = (await read(true)).results;
+  } catch {
+    rows = (await read(false)).results;
+  }
+  return rows.map((row) => ({ ...row, label: row.label ?? null, offline: row.offline === 1, deviceName: deviceLabel(row.model, row.codename) }));
+}
+
+/** The numbers of the console's home for one set: the days, the games that work, the best players and games, the devices, the versions in use and the changes of the week. */
+async function home(url, env) {
+  const environment = url.searchParams.get("env");
+  const table = TABLES[environment];
+  if (!table) return json(400, { error: "bad env" });
+  const history = HISTORY[table];
+  const today = new Date().toISOString().slice(0, 10);
+  const days = daysEndingOn(today, 62);
+  // The day a line began is `first_day`; a database that has not had migration 0023 has none, and `updated` (moved forward by a renewed answer) stands in.
+  const readLines = (day) => env.DB.prepare(`SELECT app_id AS appId, voter, verdict, app, game, device, model, codename, ${day} AS updated, fixed FROM ${history} ORDER BY id LIMIT ${MAX_HISTORY_LINES}`).all();
+  let lines;
+  try {
+    lines = (await readLines("COALESCE(first_day, updated)")).results;
+  } catch {
+    lines = (await readLines("updated")).results;
+  }
+  const latest = (await env.DB.prepare(`SELECT app_id AS appId, voter, verdict, device, model, codename, fixed FROM ${table}`).all()).results;
+  let reports = [];
+  let waiting = 0;
+  try {
+    reports = (await env.DB.prepare(`SELECT voter, substr(updated, 1, 10) AS day FROM ${REPORT_TABLES[environment]}`).all()).results;
+    waiting = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${REPORT_TABLES[environment]} WHERE handled IS NULL`).all()).results[0].n;
+  } catch {
+    // No reports table to read.
+  }
+  const nameOfRow = (row) => groupName(row.device, row.model, row.codename);
+  const top = topPlayersOf(latest, lines, reports.map((row) => row.voter), 8, nameOfRow);
+  const devices = devicesOf(latest, nameOfRow);
+  const lastDays = days.slice(-31);
+  // The games that work or not, day by day: for every device, and for each of the biggest ones on its own (the picker of the page).
+  const evolutionByDevice = {};
+  for (const device of devices.slice(0, 8)) evolutionByDevice[device.name] = evolutionOf(lines.filter((line) => nameOfRow(line) === device.name), lastDays);
+  // The same by kind of device ("kind:quest"), the way the list of games on the left filters: the two then agree.
+  for (const kind of [...new Set(lines.map((line) => line.device).filter(Boolean))].slice(0, 6)) evolutionByDevice[`kind:${kind}`] = evolutionOf(lines.filter((line) => line.device === kind), lastDays);
+  const names = await namesOf(environment, top.map((row) => row.voter), env);
+  return json(200, {
+    today,
+    daily: dailyOf(lines, reports.map((row) => row.day), days),
+    evolution: evolutionOf(lines, lastDays),
+    evolutionByDevice,
+    // The share of the players seen in the last 7, 14 and 31 days who are on each version.
+    adoption: Object.fromEntries([7, 14, 31].map((window) => [window, adoptionOf(lines, compareVersions, days[days.length - window]).slice(0, 24)])),
+    topPlayers: top.map((row) => ({ ...row, label: names.get(row.voter) ?? null })),
+    topGames: topGamesOf(latest),
+    devices,
+    versions: versionsOf(lines, days[days.length - 31], compareVersions),
+    changes: recentChanges(lines, days[days.length - 7]),
+    waiting,
+  });
+}
+
+/** The name shown for each of [voters]: the developer's, else the Discord name the player typed. A Map of hash to name, with no entry for a player who has neither. */
+async function namesOf(environment, voters, env) {
+  const names = new Map();
+  if (!voters.length) return names;
+  const marks = voters.map(() => "?").join(",");
+  const read = async (table, column) => {
+    try {
+      for (const row of (await env.DB.prepare(`SELECT voter, ${column} AS name FROM ${table} WHERE voter IN (${marks})`).bind(...voters).all()).results) if (!names.has(row.voter)) names.set(row.voter, row.name);
+    } catch {
+      // No such table yet (migration 0022).
+    }
+  };
+  await read(LABEL_TABLES[environment], "label");
+  await read(CONTACT_TABLES[environment], "discord");
+  return names;
+}
+
+/** The moves of the players between two versions of GamePort among the lines of the history that match [where]; none when the database has no history yet. */
+async function changesWhere(environment, where, binds, env) {
+  try {
+    const lines = (await env.DB.prepare(`SELECT app_id AS appId, voter, verdict, app, game FROM ${HISTORY[TABLES[environment]]} WHERE ${where} ORDER BY app_id, voter, id LIMIT ${MAX_HISTORY_LINES}`).bind(...binds).all()).results;
+    return changesOf(lines);
+  } catch {
+    return [];
+  }
+}
+
+/** The newest release (test builds left out) among the versions of the answers kept: what a vote added without a version is told to come from. Null when there is none. */
+async function newestRelease(env, table) {
+  try {
+    const rows = (await env.DB.prepare(`SELECT DISTINCT app FROM ${HISTORY[table]}`).all()).results;
+    return rows.map((row) => row.app).filter((app) => !app.includes("-alpha") && compareVersions(app, app) === 0).sort((a, b) => compareVersions(b, a))[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Every answer and every report that came from one version of GamePort: the page of a version, the same shape as the page of a player. */
+async function version(url, env) {
+  const environment = url.searchParams.get("env");
+  if (!TABLES[environment]) return json(400, { error: "bad env" });
+  const app = url.searchParams.get("app");
+  if (!validVersion(app)) return json(400, { error: "bad version" });
+  const votes = await votesWhere(environment, "v.app = ?", [app], env);
+  const reports = await reportRows(environment, " WHERE r.app = ?", [app], env);
+  // The moves of the players who answered on this version: those who arrived on it from an older one, and those who went on from it to a newer one.
+  const history = HISTORY[TABLES[environment]];
+  const changes = (await changesWhere(environment, `(app_id, voter) IN (SELECT app_id, voter FROM ${history} WHERE app = ?)`, [app], env)).filter((change) => change.from === app || change.to === app);
+  return json(200, { app, votes, reports, changes });
+}
+
+/** What a device is called on its page: its name when the list knows it, else its model, else the kind of device. The console groups the same way. */
+const groupName = (device, model, codename) => deviceLabel(model, codename) ?? (model || device);
+
+/** Every answer and every report that came from one device (a headset, say): the devices that carry the same name are one, whatever model or codename each one reports. */
+async function deviceGroup(url, env) {
+  const environment = url.searchParams.get("env");
+  const table = TABLES[environment];
+  if (!table) return json(400, { error: "bad env" });
+  const name = url.searchParams.get("name");
+  if (!validDeviceName(name)) return json(400, { error: "bad name" });
+  const seen = (await env.DB.prepare(`SELECT DISTINCT device, model, codename FROM ${table}`).all()).results;
+  const same = seen.filter((row) => groupName(row.device, row.model, row.codename) === name).slice(0, MAX_DEVICE_SPELLINGS);
+  if (!same.length) return json(200, { name, votes: [], reports: [], changes: [] });
+  const matches = (device, model, codename) => same.map(() => `(${device} = ? AND ${model} IS ? AND ${codename} IS ?)`).join(" OR ");
+  const binds = same.flatMap((row) => [row.device, row.model ?? null, row.codename ?? null]);
+  const votes = await votesWhere(environment, `(${matches("v.device", "v.model", "v.codename")})`, binds, env);
+  const reports = await reportRows(environment, ` WHERE (${matches("r.device", "v.model", "v.codename")})`, binds, env);
+  const changes = await changesWhere(environment, `(${matches("device", "model", "codename")})`, binds, env);
+  return json(200, { name, votes, reports, changes });
 }
 
 /** Gives a player a name (or takes it away with an empty one). The name stays in the developer's database and in the console: it is not written in the journal. */
@@ -573,8 +724,8 @@ async function setDefault(message, env, _table, environment) {
 
 const WRITES = { "/console/api/game-default-set": setDefault, "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove, "/console/api/report-handled": handleReport, "/console/api/incompatible-set": setIncompatible, "/console/api/reason-set": setReason, "/console/api/reason-remove": removeReason, "/console/api/incompatible-remove": removeIncompatible, "/console/api/seen": seen, "/console/api/player-label": setLabel };
 
-/** The page answers at /console and at an address that names the set and what is open: /console/prod, /console/test/1125240, /console/prod/reports, /console/prod/news, /console/test/reasons. */
-const PAGE_PATH = /^\/console\/?$|^\/console\/(test|prod)(\/(\d{1,10}|reports|news|reasons|defaults|player\/[0-9a-f]{12}))?\/?$/;
+/** The page answers at /console and at an address that names the set and what is open: /console/prod, /console/test/1125240, /console/prod/version/0.9.4, /console/prod/reports, /console/prod/news, /console/test/reasons. */
+const PAGE_PATH = /^\/console\/?$|^\/console\/(test|prod)(\/(\d{1,10}|reports|news|reasons|defaults|player\/[0-9a-f]{12}|version\/\d{1,3}\.\d{1,3}\.\d{1,3}(?:-alpha\.\d{1,5})?|device\/[\w%.\-]{1,80}))?\/?$/;
 
 /** The routes of the console. Returns a response, or null when the path is not one of the console's. */
 export async function handleConsole(request, env, ctx) {
@@ -605,6 +756,9 @@ export async function handleConsole(request, env, ctx) {
     if (url.pathname === "/console/api/reports") return request.method === "GET" ? await listReports(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/game-defaults") return request.method === "GET" ? await listDefaults(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/player") return request.method === "GET" ? await player(url, env) : json(405, { error: "use GET" });
+    if (url.pathname === "/console/api/version") return request.method === "GET" ? await version(url, env) : json(405, { error: "use GET" });
+    if (url.pathname === "/console/api/home") return request.method === "GET" ? await home(url, env) : json(405, { error: "use GET" });
+    if (url.pathname === "/console/api/device") return request.method === "GET" ? await deviceGroup(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/report") return request.method === "GET" ? await downloadReport(url, env) : json(405, { error: "use GET" });
     const write = WRITES[url.pathname];
     if (!write) return notFound();
