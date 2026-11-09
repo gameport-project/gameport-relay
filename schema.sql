@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS reports_test (
 -- developer writes here (the console); the app and the site read it with the list of games (the /incompatible routes), so nothing is typed per game.
 CREATE TABLE IF NOT EXISTS incompatible_reasons (
   id       TEXT PRIMARY KEY,  -- a short word, e.g. anti-tamper
+  kind     TEXT NOT NULL DEFAULT 'blocks', -- blocks: the game cannot run; warns: it runs and the player is told (e.g. it may close on its own)
   title_en TEXT NOT NULL,
   title_fr TEXT NOT NULL,
   text_en  TEXT NOT NULL,
@@ -92,15 +93,18 @@ CREATE TABLE IF NOT EXISTS incompatible_reasons (
 
 -- The games confirmed as incompatible, each with the reason it is on the list for. Taking a game out, once it works, shows at once everywhere.
 CREATE TABLE IF NOT EXISTS incompatible (
-  app_id  INTEGER PRIMARY KEY,
+  app_id  INTEGER NOT NULL,
   name    TEXT NOT NULL,
-  reason  TEXT NOT NULL,    -- an id of incompatible_reasons
-  updated TEXT NOT NULL     -- the day, YYYY-MM-DD
+  reason  TEXT NOT NULL,    -- an id of incompatible_reasons; a game can have several, each with its own devices
+  devices TEXT NOT NULL DEFAULT '', -- empty: incompatible on every device; else the kinds (quest, pico, phone, tablet, other) and model names it is limited to, comma-separated
+  updated TEXT NOT NULL,    -- the day, YYYY-MM-DD
+  PRIMARY KEY (app_id, reason)
 );
 
 -- The same two tables for the test builds of the app (the /test routes).
 CREATE TABLE IF NOT EXISTS incompatible_reasons_test (
   id       TEXT PRIMARY KEY,
+  kind     TEXT NOT NULL DEFAULT 'blocks',
   title_en TEXT NOT NULL,
   title_fr TEXT NOT NULL,
   text_en  TEXT NOT NULL,
@@ -108,10 +112,12 @@ CREATE TABLE IF NOT EXISTS incompatible_reasons_test (
 );
 
 CREATE TABLE IF NOT EXISTS incompatible_test (
-  app_id  INTEGER PRIMARY KEY,
+  app_id  INTEGER NOT NULL,
   name    TEXT NOT NULL,
   reason  TEXT NOT NULL,
-  updated TEXT NOT NULL
+  devices TEXT NOT NULL DEFAULT '',
+  updated TEXT NOT NULL,
+  PRIMARY KEY (app_id, reason)
 );
 
 -- What the developer's console has already shown: one row per list ('votes-prod', 'votes-test', 'games'), with the hour (or, for the games, the day) of the last time

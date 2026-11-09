@@ -96,7 +96,7 @@ describe("who may come in", () => {
   });
 
   it("serves the page at an address that names the set and what is open, so a refresh comes back to the same place", async () => {
-    for (const path of ["/console/test", "/console/prod", "/console/prod/", "/console/test/1125240", "/console/prod/reports", "/console/prod/news", "/console/test/reasons"]) {
+    for (const path of ["/console/test", "/console/prod", "/console/prod/", "/console/test/1125240", "/console/prod/reports", "/console/prod/news", "/console/test/reasons", "/console/prod/incompatible"]) {
       const response = await ask(path);
       assert.equal(response.status, 200, path);
       assert.match(response.headers.get("content-type"), /text\/html/, path);
@@ -818,6 +818,9 @@ describe("the players", () => {
     // The kind of each device is the one its answers came with (this test sends every answer as "quest").
     assert.deepEqual(data.devices.map((d) => d.kind), ["quest", "quest"]);
     assert.deepEqual(data.versions, [{ app: "0.9.4", players: 2 }]);
+    // The same count for the buttons of the card: the last 7, 14 and 31 days (every line of this test is from today).
+    assert.deepEqual(Object.keys(data.versionsByWindow), ["7", "14", "31"]);
+    for (const window of ["7", "14", "31"]) assert.deepEqual(data.versionsByWindow[window], [{ app: "0.9.4", players: 2 }]);
     assert.deepEqual(data.changes.map((c) => [c.appId, c.kind]), [[5, "regression"]]);
     assert.equal(data.waiting, 0);
     assert.equal((await ask("/console/api/home?env=other")).status, 400);
@@ -1046,7 +1049,8 @@ describe("the list of incompatible games", () => {
   const post = (path, body) => ask(`/console/api/${path}`, { method: "POST", body });
   const setReason = (extra = {}, environment = "prod") => post("reason-set", { env: environment, ...reason, ...extra });
   const setGame = (extra = {}, environment = "prod") => post("incompatible-set", { env: environment, appId: 438100, name: "Some game", reason: "anti-tamper", ...extra });
-  const publicList = async (path = "/incompatible") => (await worker.fetch(new Request(`${ORIGIN}${path}`), env)).json();
+  // The answer an app that asks with ?v=2 gets: every line, with the kind of each reason and the devices of each game.
+  const publicList = async (path = "/incompatible?v=2") => (await worker.fetch(new Request(`${ORIGIN}${path}`), env)).json();
 
   it("is empty until the developer adds a reason and a game, and the list is public", async () => {
     assert.deepEqual(await publicList(), { v: 1, reasons: {}, games: [] });
@@ -1054,9 +1058,78 @@ describe("the list of incompatible games", () => {
     assert.equal((await setGame()).status, 200);
     assert.deepEqual(await publicList(), {
       v: 1,
-      reasons: { "anti-tamper": { title: reason.title, text: reason.text } },
-      games: [{ appId: 438100, name: "Some game", reason: "anti-tamper" }],
+      reasons: { "anti-tamper": { kind: "blocks", title: reason.title, text: reason.text } },
+      games: [{ appId: 438100, name: "Some game", reason: "anti-tamper", devices: [] }],
     });
+  });
+
+  it("tells a reason that warns from one that blocks, and a reason blocks unless it says it warns", async () => {
+    assert.equal((await setReason({ id: "sometimes-closes", kind: "warns" })).status, 200);
+    assert.equal((await setReason()).status, 200);
+    const list = await publicList();
+    assert.equal(list.reasons["sometimes-closes"].kind, "warns");
+    assert.equal(list.reasons["anti-tamper"].kind, "blocks");
+    assert.equal((await setReason({ id: "sometimes-closes", kind: "nonsense" })).status, 400);
+    assert.equal((await publicList()).reasons["sometimes-closes"].kind, "warns");
+  });
+
+  it("gives an older app, which asks without ?v=2, only the games that block on every device, with nothing it does not know", async () => {
+    await setReason({ id: "everywhere" });
+    await setReason({ id: "sometimes-closes", kind: "warns" });
+    await setGame({ appId: 1, name: "Everywhere", reason: "everywhere" });
+    await setGame({ appId: 2, name: "Only Quest", reason: "everywhere", devices: ["quest"] });
+    await setGame({ appId: 3, name: "Warned", reason: "sometimes-closes" });
+    await setGame({ appId: 4, name: "Warned on Quest 3", reason: "sometimes-closes", devices: ["Meta Quest 3"] });
+    const older = await publicList("/incompatible");
+    assert.deepEqual(older.games, [{ appId: 1, name: "Everywhere", reason: "everywhere" }]);
+    assert.deepEqual(Object.keys(older.reasons), ["everywhere"]);
+    assert.equal(older.v, 1);
+    assert.equal("kind" in older.reasons.everywhere, false);
+    // The test builds are told the same way.
+    assert.deepEqual((await publicList("/test/incompatible")).games, []);
+    // An app that asks with ?v=2 gets every line.
+    const newer = await publicList("/incompatible?v=2");
+    assert.deepEqual(newer.games.map((g) => g.appId), [1, 2, 3, 4]);
+    assert.equal(newer.reasons["sometimes-closes"].kind, "warns");
+  });
+
+  it("limits a game to the devices named, and a game with none is incompatible everywhere", async () => {
+    await setReason();
+    assert.equal((await setGame({ devices: ["Quest", " Meta Quest 3 ", "quest", ""] })).status, 200);
+    assert.equal((await setGame({ appId: 5, name: "Other" })).status, 200);
+    const games = (await publicList()).games;
+    assert.deepEqual(games.find((g) => g.appId === 438100).devices, ["Quest", "Meta Quest 3"]);
+    assert.deepEqual(games.find((g) => g.appId === 5).devices, []);
+    // The console sees the same names, and setting the game again without any makes it incompatible everywhere.
+    assert.deepEqual((await (await ask("/console/api/incompatible?env=prod")).json()).games.find((g) => g.appId === 438100).devices, ["Quest", "Meta Quest 3"]);
+    assert.equal((await setGame({})).status, 200);
+    assert.deepEqual((await publicList()).games.find((g) => g.appId === 438100).devices, []);
+  });
+
+  it("lets a game have one line for each reason, each with its own devices", async () => {
+    await setReason();
+    await setReason({ id: "crash", title: { en: "Crashes", fr: "Plante" } });
+    await setGame({ devices: ["quest"] });
+    await setGame({ reason: "crash", devices: ["pico"] });
+    const games = (await publicList()).games;
+    assert.deepEqual(games.map((g) => [g.reason, g.devices]), [["anti-tamper", ["quest"]], ["crash", ["pico"]]]);
+    // Taking one reason off leaves the other; without a reason the whole game goes.
+    assert.equal((await post("incompatible-remove", { env: "prod", appId: 438100, reason: "crash" })).status, 200);
+    assert.deepEqual((await publicList()).games.map((g) => g.reason), ["anti-tamper"]);
+    assert.equal((await post("incompatible-remove", { env: "prod", appId: 438100, reason: "crash" })).status, 404);
+    await setGame({ reason: "crash" });
+    assert.equal((await post("incompatible-remove", { env: "prod", appId: 438100 })).status, 200);
+    assert.deepEqual((await publicList()).games, []);
+  });
+
+  it("refuses devices that are not plain names", async () => {
+    await setReason();
+    assert.equal((await setGame({ devices: "quest" })).status, 400);
+    assert.equal((await setGame({ devices: ["<b>"] })).status, 400);
+    assert.equal((await setGame({ devices: ["a".repeat(41)] })).status, 400);
+    assert.equal((await setGame({ devices: [1] })).status, 400);
+    assert.equal((await setGame({ devices: ["a", "b", "c", "d", "e", "f", "g", "h", "i"] })).status, 400);
+    assert.deepEqual((await publicList()).games, []);
   });
 
   it("refuses a game whose reason does not exist, and never takes a text for a game", async () => {
@@ -1071,7 +1144,7 @@ describe("the list of incompatible games", () => {
     await setReason({}, "test");
     await setGame({}, "test");
     assert.deepEqual((await publicList()).games, []);
-    assert.equal((await publicList("/test/incompatible")).games.length, 1);
+    assert.equal((await publicList("/test/incompatible?v=2")).games.length, 1);
   });
 
   it("changing the texts of a reason reaches every game that names it", async () => {
@@ -1088,8 +1161,8 @@ describe("the list of incompatible games", () => {
     await setReason();
     await setReason({ id: "crash", title: { en: "Crashes", fr: "Plante" } });
     await setGame();
-    await setGame({ reason: "crash" });
-    assert.equal((await publicList()).games[0].reason, "crash");
+    await setGame({ reason: "crash", was: "anti-tamper" });
+    assert.deepEqual((await publicList()).games.map((g) => g.reason), ["crash"]);
     assert.equal((await post("incompatible-remove", { env: "prod", appId: 438100 })).status, 200);
     assert.deepEqual((await publicList()).games, []);
     assert.equal((await post("incompatible-remove", { env: "prod", appId: 438100 })).status, 404);

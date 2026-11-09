@@ -618,17 +618,28 @@ async function gameReports(env, table, appId) {
 }
 
 /** The games confirmed as incompatible, and the reasons they name (title and explanation in each language). Nothing about any player. */
-async function incompatibleList(env, table, reasonsTable) {
+async function incompatibleList(env, table, reasonsTable, withDevices) {
   let games;
   let reasons;
   try {
-    games = (await env.DB.prepare(`SELECT app_id AS appId, name, reason FROM ${table} ORDER BY app_id`).all()).results;
-    reasons = (await env.DB.prepare(`SELECT id, title_en, title_fr, text_en, text_fr FROM ${reasonsTable} ORDER BY id`).all()).results;
+    games = (await env.DB.prepare(`SELECT app_id AS appId, name, reason, devices FROM ${table} ORDER BY app_id, reason`).all()).results;
+    reasons = (await env.DB.prepare(`SELECT id, kind, title_en, title_fr, text_en, text_fr FROM ${reasonsTable} ORDER BY id`).all()).results;
   } catch {
     return reply(500, { error: "not read" });
   }
-  const byId = Object.fromEntries(reasons.map((r) => [r.id, { title: { en: r.title_en, fr: r.title_fr }, text: { en: r.text_en, fr: r.text_fr } }]));
-  return reply(200, { v: 1, reasons: byId, games }, { "cache-control": "public, max-age=300" });
+  // An app that asks with ?v=2 knows two fields: "kind" of a reason (blocks, the game cannot run, or warns, it runs and the player is told) and the "devices" a game is limited to
+  // (none means every device). An older app knows neither and takes every line as incompatible everywhere, so it is given only the lines that are exactly that: a reason that
+  // blocks, for every device. What warns, or is limited to some devices, is left out for it. The "v" of the answer stays 1 for both, which is the one the older apps accept.
+  const everywhere = (g) => !g.devices && reasons.some((r) => r.id === g.reason && r.kind !== "warns");
+  const shown = withDevices ? games : games.filter(everywhere);
+  const used = new Set(shown.map((g) => g.reason));
+  const byId = Object.fromEntries(reasons.filter((r) => withDevices || used.has(r.id)).map((r) => [r.id, withDevices
+    ? { kind: r.kind, title: { en: r.title_en, fr: r.title_fr }, text: { en: r.text_en, fr: r.text_fr } }
+    : { title: { en: r.title_en, fr: r.title_fr }, text: { en: r.text_en, fr: r.text_fr } }]));
+  const listed = shown.map((g) => withDevices
+    ? { appId: g.appId, name: g.name, reason: g.reason, devices: g.devices ? g.devices.split(",") : [] }
+    : { appId: g.appId, name: g.name, reason: g.reason });
+  return reply(200, { v: 1, reasons: byId, games: listed }, { "cache-control": "public, max-age=300" });
 }
 
 /** What the developer told the app about each game: `{ "804530": { "passthrough": "on" } }`. Nothing about any player; a setting this version does not know is left out. */
@@ -673,7 +684,7 @@ export default {
     if (!route) return reply(404, { error: "not found" });
     if (!env.DB) return reply(500, { error: "relay not configured" });
     if (route.defaults) return request.method === "GET" ? gameDefaults(env, route.table) : reply(405, { error: "use GET" });
-    if (route.list) return request.method === "GET" ? incompatibleList(env, route.table, route.reasons) : reply(405, { error: "use GET" });
+    if (route.list) return request.method === "GET" ? incompatibleList(env, route.table, route.reasons, new URL(request.url).searchParams.get("v") === "2") : reply(405, { error: "use GET" });
     if (route.report) return request.method === "POST" ? report(request, env, route.table, ctx) : reply(405, { error: "use POST" });
     if (!route.write) return request.method === "GET" ? summary(env, route.table) : reply(405, { error: "use GET" });
     return request.method === "POST" ? vote(request, env, route.table, ctx) : reply(405, { error: "use POST" });

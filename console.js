@@ -455,6 +455,8 @@ async function home(url, env) {
     topGames: topGamesOf(latest),
     devices,
     versions: versionsOf(lines, days[days.length - 31], compareVersions),
+    // The same for the last 7, 14 and 31 days: the buttons of the card of the versions.
+    versionsByWindow: Object.fromEntries([7, 14, 31].map((window) => [window, versionsOf(lines, days[days.length - window], compareVersions)])),
     changes: recentChanges(lines, days[days.length - 7]),
     waiting,
   });
@@ -610,12 +612,27 @@ const validReasonId = (id) => typeof id === "string" && /^[a-z0-9]+(-[a-z0-9]+)*
 async function listIncompatible(url, env) {
   const tables = INCOMPATIBLE_TABLES[url.searchParams.get("env")];
   if (!tables) return json(400, { error: "bad env" });
-  const reasons = (await env.DB.prepare(`SELECT r.id, r.title_en, r.title_fr, r.text_en, r.text_fr, (SELECT COUNT(*) FROM ${tables.games} g WHERE g.reason = r.id) AS uses FROM ${tables.reasons} r ORDER BY r.id`).all()).results;
-  const games = (await env.DB.prepare(`SELECT app_id AS appId, name, reason, updated FROM ${tables.games} ORDER BY name`).all()).results;
+  const reasons = (await env.DB.prepare(`SELECT r.id, r.kind, r.title_en, r.title_fr, r.text_en, r.text_fr, (SELECT COUNT(*) FROM ${tables.games} g WHERE g.reason = r.id) AS uses FROM ${tables.reasons} r ORDER BY r.id`).all()).results;
+  const games = (await env.DB.prepare(`SELECT app_id AS appId, name, reason, devices, updated FROM ${tables.games} ORDER BY name, reason`).all()).results;
   return json(200, {
-    reasons: reasons.map((r) => ({ id: r.id, title: { en: r.title_en, fr: r.title_fr }, text: { en: r.text_en, fr: r.text_fr }, uses: r.uses })),
-    games,
+    reasons: reasons.map((r) => ({ id: r.id, kind: r.kind, title: { en: r.title_en, fr: r.title_fr }, text: { en: r.text_en, fr: r.text_fr }, uses: r.uses })),
+    games: games.map((g) => ({ ...g, devices: g.devices ? g.devices.split(",") : [] })),
   });
+}
+
+/** The devices a game is limited to: a list of kinds and model names, each short and plain, or nothing for every device. Null when it is not that. */
+function checkDevices(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 8) return null;
+  const names = [];
+  for (const item of value) {
+    if (typeof item !== "string") return null;
+    const name = item.trim().replace(/\s+/g, " ");
+    if (!name) continue;
+    if (name.length > 40 || !/^[A-Za-z0-9][A-Za-z0-9 .+\-]*$/.test(name)) return null;
+    if (!names.some((n) => n.toLowerCase() === name.toLowerCase())) names.push(name);
+  }
+  return names;
 }
 
 /** Adds a reason, or changes its texts: every game that names it shows the new texts at once. */
@@ -626,9 +643,11 @@ async function setReason(message, env, _table, environment) {
   if (!title) return json(400, { error: "bad title" });
   const text = checkTexts(message.text, 400);
   if (!text) return json(400, { error: "bad text" });
-  await env.DB.prepare(`INSERT INTO ${tables.reasons} (id, title_en, title_fr, text_en, text_fr) VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT (id) DO UPDATE SET title_en = excluded.title_en, title_fr = excluded.title_fr, text_en = excluded.text_en, text_fr = excluded.text_fr`)
-    .bind(message.id, title.en, title.fr, text.en, text.fr).run();
+  const kind = message.kind === undefined ? "blocks" : message.kind;
+  if (kind !== "blocks" && kind !== "warns") return json(400, { error: "bad kind" });
+  await env.DB.prepare(`INSERT INTO ${tables.reasons} (id, kind, title_en, title_fr, text_en, text_fr) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT (id) DO UPDATE SET kind = excluded.kind, title_en = excluded.title_en, title_fr = excluded.title_fr, text_en = excluded.text_en, text_fr = excluded.text_fr`)
+    .bind(message.id, kind, title.en, title.fr, text.en, text.fr).run();
   log("reason-set", { env: environment, id: message.id });
   return json(200, { ok: true });
 }
@@ -653,22 +672,32 @@ async function setIncompatible(message, env, _table, environment) {
   if (!validReasonId(message.reason)) return json(400, { error: "bad reason" });
   const [known] = (await env.DB.prepare(`SELECT id FROM ${tables.reasons} WHERE id = ?`).bind(message.reason).all()).results;
   if (!known) return json(400, { error: "unknown reason" });
+  const devices = checkDevices(message.devices);
+  if (!devices) return json(400, { error: "bad devices" });
   const today = new Date().toISOString().slice(0, 10);
-  await env.DB.prepare(`INSERT INTO ${tables.games} (app_id, name, reason, updated) VALUES (?, ?, ?, ?)
-    ON CONFLICT (app_id) DO UPDATE SET name = excluded.name, reason = excluded.reason, updated = excluded.updated`)
-    .bind(message.appId, name, message.reason, today).run();
-  log("incompatible-set", { env: environment, appId: message.appId, name, reason: message.reason });
+  // A game has one line for each reason, with its own devices. "was" is the reason this line had before, when it is changed: that line is taken off right after.
+  if (message.was !== undefined && !validReasonId(message.was)) return json(400, { error: "bad previous reason" });
+  const steps = [env.DB.prepare(`INSERT INTO ${tables.games} (app_id, name, reason, devices, updated) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT (app_id, reason) DO UPDATE SET name = excluded.name, devices = excluded.devices, updated = excluded.updated`)
+    .bind(message.appId, name, message.reason, devices.join(","), today)];
+  if (message.was !== undefined && message.was !== message.reason) steps.push(env.DB.prepare(`DELETE FROM ${tables.games} WHERE app_id = ? AND reason = ?`).bind(message.appId, message.was));
+  steps.push(env.DB.prepare(`UPDATE ${tables.games} SET name = ? WHERE app_id = ?`).bind(name, message.appId));
+  // One after the other, the new line first: a failure in between leaves a line too many, never one too few.
+  for (const step of steps) await step.run();
+  log("incompatible-set", { env: environment, appId: message.appId, name, reason: message.reason, devices });
   return json(200, { ok: true });
 }
 
-/** Takes a game off the incompatible list: from then on the app and the site no longer say so. */
+/** Takes a game off the incompatible list, or only one of its reasons when one is given: from then on the app and the site no longer say so. */
 async function removeIncompatible(message, env, _table, environment) {
   const tables = INCOMPATIBLE_TABLES[environment];
   if (!validId(message.appId)) return json(400, { error: "bad appId" });
-  const [row] = (await env.DB.prepare(`SELECT name FROM ${tables.games} WHERE app_id = ?`).bind(message.appId).all()).results;
+  if (message.reason !== undefined && !validReasonId(message.reason)) return json(400, { error: "bad reason" });
+  const where = message.reason === undefined ? { sql: "app_id = ?", args: [message.appId] } : { sql: "app_id = ? AND reason = ?", args: [message.appId, message.reason] };
+  const [row] = (await env.DB.prepare(`SELECT name FROM ${tables.games} WHERE ${where.sql}`).bind(...where.args).all()).results;
   if (!row) return json(404, { error: "not on the list" });
-  await env.DB.prepare(`DELETE FROM ${tables.games} WHERE app_id = ?`).bind(message.appId).run();
-  log("incompatible-remove", { env: environment, appId: message.appId, name: row.name });
+  await env.DB.prepare(`DELETE FROM ${tables.games} WHERE ${where.sql}`).bind(...where.args).run();
+  log("incompatible-remove", { env: environment, appId: message.appId, name: row.name, reason: message.reason });
   return json(200, { ok: true });
 }
 
@@ -741,7 +770,7 @@ async function setDefault(message, env, _table, environment) {
 const WRITES = { "/console/api/game-default-set": setDefault, "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove, "/console/api/report-handled": handleReport, "/console/api/incompatible-set": setIncompatible, "/console/api/reason-set": setReason, "/console/api/reason-remove": removeReason, "/console/api/incompatible-remove": removeIncompatible, "/console/api/seen": seen, "/console/api/player-label": setLabel };
 
 /** The page answers at /console and at an address that names the set and what is open: /console/prod, /console/test/1125240, /console/prod/version/0.9.4, /console/prod/reports, /console/prod/news, /console/test/reasons. */
-const PAGE_PATH = /^\/console\/?$|^\/console\/(test|prod)(\/(\d{1,10}|reports|news|reasons|defaults|player\/[0-9a-f]{12}|version\/\d{1,3}\.\d{1,3}\.\d{1,3}(?:-alpha\.\d{1,5})?|device\/[\w%.\-:]{1,80}))?\/?$/;
+const PAGE_PATH = /^\/console\/?$|^\/console\/(test|prod)(\/(\d{1,10}|reports|news|reasons|incompatible|defaults|player\/[0-9a-f]{12}|version\/\d{1,3}\.\d{1,3}\.\d{1,3}(?:-alpha\.\d{1,5})?|device\/[\w%.\-:]{1,80}))?\/?$/;
 
 /** The routes of the console. Returns a response, or null when the path is not one of the console's. */
 export async function handleConsole(request, env, ctx) {
