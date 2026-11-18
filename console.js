@@ -499,6 +499,13 @@ async function newestRelease(env, table) {
   }
 }
 
+/** The newest release of GamePort the relay has seen answers from (never an alpha): what the console puts in the version of a vote added by hand. */
+async function newestReleaseOf(url, env) {
+  const environment = url.searchParams.get("env");
+  if (!TABLES[environment]) return json(400, { error: "bad env" });
+  return json(200, { version: await newestRelease(env, TABLES[environment]) });
+}
+
 /** Every answer and every report that came from one version of GamePort: the page of a version, the same shape as the page of a player. */
 async function version(url, env) {
   const environment = url.searchParams.get("env");
@@ -802,6 +809,7 @@ export async function handleConsole(request, env, ctx) {
     if (url.pathname === "/console/api/game-defaults") return request.method === "GET" ? await listDefaults(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/player") return request.method === "GET" ? await player(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/version") return request.method === "GET" ? await version(url, env) : json(405, { error: "use GET" });
+    if (url.pathname === "/console/api/newest-release") return request.method === "GET" ? await newestReleaseOf(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/home") return request.method === "GET" ? await home(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/device") return request.method === "GET" ? await deviceGroup(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/report") return request.method === "GET" ? await downloadReport(url, env) : json(405, { error: "use GET" });

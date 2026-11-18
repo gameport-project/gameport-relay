@@ -751,6 +751,15 @@ describe("the players", () => {
     assert.equal((await ask("/console/prod/device/a/b")).status, 404);
   });
 
+  it("tells the newest release seen, never an alpha, for the version of a vote added by hand", async () => {
+    assert.deepEqual(await (await ask("/console/api/newest-release?env=prod")).json(), { version: null });
+    vote(5, "aaaaaaaaaaaa", { app: "0.9.3" });
+    vote(5, "bbbbbbbbbbbb", { app: "0.9.4" });
+    vote(5, "cccccccccccc", { app: "0.9.5-alpha.2" });
+    assert.deepEqual(await (await ask("/console/api/newest-release?env=prod")).json(), { version: "0.9.4" });
+    assert.equal((await ask("/console/api/newest-release?env=nope")).status, 400);
+  });
+
   it("lists every answer and report of one version of GamePort, with the name of each player", async () => {
     vote(5, "aaaaaaaaaaaa", { app: "0.9.1", verdict: "works" });
     vote(6, "bbbbbbbbbbbb", { app: "0.9.1", verdict: "fails" });

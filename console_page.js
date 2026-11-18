@@ -10,7 +10,7 @@ export function consolePage(nonce) {
 <meta name="robots" content="noindex, nofollow">
 <title>GamePort console</title>
 <style nonce="${nonce}">
-:root { --env-soft:rgba(60,76,122,.6); --env-glow:rgba(79,134,255,.45); --bg:#222932; --card:rgba(23,28,34,.66); --line:rgba(255,255,255,.12); --text:#e3e8ef; --muted:#b4bdc9; --env:#2f6fed; --warn:#f0b24a; color-scheme: dark; }
+:root { --env-soft:rgba(60,76,122,.6); --env-glow:rgba(79,134,255,.45); --bg:#222932; --card:rgba(23,28,34,.66); --line:rgba(255,255,255,.12); --text:#e3e8ef; --muted:#b4bdc9; --env:#2f6fed; --warn:#f0b24a; --r-control:10px; --r-pill:999px; color-scheme: dark; }
 body.test { --env:#4f86ff; } body.prod { --env:#ef5b61; --env-soft:rgba(140,58,72,.55); --env-glow:rgba(239,91,97,.5); }
 * { box-sizing: border-box; }
 body { margin:0; background:radial-gradient(1100px 620px at 12% -12%, var(--env-soft), transparent 62%), linear-gradient(160deg, #222932 0%, #2a3350 58%, #3c4c7a 120%); background-attachment:fixed; color:var(--text); font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
@@ -42,12 +42,27 @@ input[type=search]:focus, .field:focus { border-color:rgba(255,255,255,.4); }
 .game[aria-pressed="true"] { background:rgba(255,255,255,.1); border-color:var(--line); }
 .game .n { min-width:26px; text-align:center; padding:2px 8px; border-radius:999px; color:#10131a; font-size:12px; font-weight:800; }
 .n-works { background:#4cc38a; } .n-offline_only { background:#f0b24a; } .n-fails { background:#ef6b6b; }
-.only { margin-top:10px; width:100%; }
+/* One button component, .btn (a pill), with its variants: .fill, .danger, .block (as wide as the control next to it, with the corners of the controls: the filters of the list) and .glass (on an image). */
+.btn.block { width:100%; margin-top:10px; border-radius:var(--r-control); }
+.btn.block[aria-pressed="true"] { background:#fff; color:#111; border-color:transparent; }
+.btn.block span { opacity:.7; font-weight:500; }
+.btn.glass { background:rgba(13,16,22,.55); border-color:rgba(255,255,255,.28); color:#fff; -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px); }
+.btn.glass:hover { background:rgba(13,16,22,.75); }
+.btn.glass[aria-pressed="true"] { background:rgba(122,211,155,.24); border-color:#7ad39b; color:#c4f1d6; }
+.hero > .btn.glass { position:absolute; top:14px; right:14px; z-index:2; height:34px; }
+.mine-menu { width:300px; }
+#mine-text { width:100%; min-height:110px; box-sizing:border-box; font:inherit; font-size:13px; color:inherit; background:rgba(255,255,255,.06); border:1px solid var(--line); border-radius:8px; padding:8px; resize:vertical; }
+.hero-price { margin-top:8px; font-size:13px; color:#c3cad6; }
+.hero-price small { color:var(--muted); font-size:12px; font-weight:600; }
+.hp-chip { font-weight:700; }
+.pv-lowest .hp-chip, .pv-great .hp-chip { color:#7ad39b; }
+.pv-good .hp-chip { color:#9db9ff; }
+.pv-fair .hp-chip, .pv-wait .hp-chip { color:#f0b24a; }
 .device-filter { margin-top:10px; width:100%; }
 .filter-row { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); gap:8px; align-items:start; }
 .filter-row .device-filter { min-width:0; width:100%; box-sizing:border-box; }
 .sbox { position:relative; min-width:0; margin-top:10px; }
-.sbox > summary { display:block; box-sizing:border-box; width:100%; list-style:none; height:38px; line-height:36px; padding:0 38px 0 12px; border:1px solid var(--line); border-radius:10px; cursor:pointer; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; background-color:#0f131b; background-repeat:no-repeat; background-position:right 12px center; background-size:12px 8px; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%2398a2b3' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+.sbox > summary { display:block; box-sizing:border-box; width:100%; list-style:none; height:38px; line-height:36px; padding:0 38px 0 12px; border:1px solid var(--line); border-radius:var(--r-control); cursor:pointer; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; background-color:#0f131b; background-repeat:no-repeat; background-position:right 12px center; background-size:12px 8px; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%2398a2b3' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
 .sbox > summary::-webkit-details-marker { display:none; }
 .sbox[open] > summary { border-color:rgba(255,255,255,.4); }
 .sbox-menu { position:absolute; right:0; left:auto; top:calc(100% + 4px); z-index:30; min-width:100%; width:max-content; max-width:min(320px, 86vw); background:#1b2130; border:1px solid var(--line); border-radius:10px; padding:6px; }
@@ -65,7 +80,6 @@ input[type=search]:focus, .field:focus { border-color:rgba(255,255,255,.4); }
 .tgl:checked::after { transform:translateX(20px); }
 .tgl:focus-visible { outline:2px solid rgba(255,255,255,.6); outline-offset:2px; }
 .discord-icon { color:#8c96ff; vertical-align:-2px; margin-right:6px; flex:none; }
-.only[aria-pressed="true"] { background:#fff; color:#111; border-color:transparent; }
 .muted { color:var(--muted); }
 .hero { position:relative; min-height:200px; border-radius:16px; overflow:hidden; margin:-4px 0 16px; background:#0f131b center / cover no-repeat; display:flex; align-items:flex-end; }
 .hero::before { content:""; position:absolute; inset:0; background:linear-gradient(180deg, rgba(13,16,22,.05), rgba(13,16,22,.92)); }
@@ -94,6 +108,11 @@ details.incompat { margin:0 0 16px; border:1px dashed var(--line); border-radius
 details.incompat > summary { cursor:pointer; padding:10px 14px; font-weight:600; }
 details.incompat[open] > summary { border-bottom:1px dashed var(--line); }
 details.incompat > .add { border:0; margin:0; }
+.incompat-body { display:flex; flex-direction:column; gap:12px; padding:14px; }
+.incompat-body > .add { margin-bottom:0; }
+.reason-preview { display:flex; flex-direction:column; gap:8px; }
+.reason-preview p { margin:0; }
+.reason-preview b { margin-right:6px; color:var(--text); }
 details.incompat.is-incompatible > summary { color:#ff9a9a; }
 .votes { display:flex; flex-direction:column; gap:10px; }
 .synth { margin:0 0 10px; font-size:13px; opacity:.85; }
@@ -238,7 +257,7 @@ select {
   background:#0f131b url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%2398a2b3' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 14px center / 12px 8px;
 }
 select.field { padding-right:38px; }
-.btn { height:38px; padding:0 16px; border-radius:999px; border:1px solid var(--line); background:rgba(255,255,255,.07); cursor:pointer; font-weight:600; }
+.btn { height:38px; padding:0 16px; border-radius:var(--r-pill); border:1px solid var(--line); background:rgba(255,255,255,.07); cursor:pointer; font-weight:600; }
 .btn:hover { background:rgba(255,255,255,.15); }
 .btn.fill { background:#fff; color:#111; border-color:transparent; }
 .btn.danger { color:#ff8a8a; }
@@ -329,7 +348,11 @@ a.btn { display:inline-flex; align-items:center; text-decoration:none; }
       <select id="device" class="device-filter" aria-label="Device"><option value="all">All devices</option></select>
       <details class="sbox" id="status"><summary id="status-label" aria-label="Status of the games">All statuses</summary><div class="sbox-menu" id="status-menu"></div></details>
     </div>
-    <button type="button" class="btn only" id="only" aria-pressed="false">Only games with votes</button>
+    <button type="button" class="btn block" id="only" aria-pressed="false">Only games with votes</button>
+    <div class="filter-row mine-row">
+      <button type="button" class="btn block" id="mine" aria-pressed="false">My games <span id="mine-count"></span></button>
+      <details class="sbox" id="mine-box"><summary aria-label="List of my games">My list</summary><div class="sbox-menu mine-menu"><textarea id="mine-text" rows="6" placeholder="App ids of my games, separated by spaces, commas or lines. The list is kept as soon as it is pasted." aria-label="App ids of my games"></textarea></div></details>
+    </div>
     <div class="games" id="games"></div>
   </section>
   <section class="panel" id="detail"><p class="muted">Pick a game.</p></section>
@@ -403,7 +426,7 @@ var FR = {
   "No vote for this game on this device.": "Aucun vote pour ce jeu sur cet appareil.", "No vote for this game.": "Aucun vote pour ce jeu.",
   "Nothing shows": "Rien ne s'affiche", "Flat window instead of VR": "Fenêtre plate au lieu de la VR", "Closes by itself": "Se ferme tout seul", "Stuck on loading": "Bloqué au chargement",
   "Controls missing or wrong": "Commandes absentes ou fausses", "No sound": "Pas de son", "Cannot play online": "Impossible de jouer en ligne", "Slow or stuttering": "Lent ou saccadé", "No passthrough": "Pas de passthrough",
-  "Wrong colors or broken image": "Couleurs fausses ou image cassée", "Something else": "Autre chose", "Not specified": "Non précisé", "Search a model": "Rechercher un modèle",
+  "Wrong colors or broken image": "Couleurs fausses ou image cassée", "Something else": "Autre chose", "Not specified": "Non précisé", "Add games to a reason": "Ajouter des jeux à une raison", "Add a game: type its name": "Ajouter un jeu : taper son nom", "Add a game": "Ajouter un jeu", "My games": "Mes jeux", "My list": "Ma liste", "Add to my list": "Ajouter à ma liste", "In my list": "Dans ma liste", "Now": "Maintenant", "Lowest": "Plus bas", "Lowest price seen": "Prix le plus bas jamais vu", "Great price": "Très bon prix", "Good price": "Bon prix", "Fair price": "Prix correct", "Better to wait": "Mieux vaut attendre", "Usual price": "Prix habituel", "Search a model": "Rechercher un modèle",
   "Not fixed": "Non corrigé", "Mark fixed": "Marquer comme corrigé", "Back to the answer given": "Retour à la réponse donnée",
   "Fixed in which version? (optional, for example 0.9.0)": "Corrigé dans quelle version ? (facultatif, par exemple 0.9.0)", "Letters, digits, dots, dashes and spaces only": "Lettres, chiffres, points, tirets et espaces seulement", "Marked fixed": "Marqué comme corrigé",
   "More": "Plus", "Model": "Modèle", "Worked offline": "A marché hors ligne", "worked offline": "a marché hors ligne",
@@ -428,6 +451,7 @@ var FR = {
 // Sentences made of a number and a word, or of fixed words around a name. Each rule is tried on every text, in this order.
 function plFr(n, one, many) { return n + " " + (Number(n) === 1 ? one : many); }
 var FR_RULES = [
+  [/\\bMark (\\d+) games as incompatible/g, "Marquer $1 jeux comme incompatibles"],
   [/^New games \\((\\d+) in (?:the month|(\\d+) days)\\)$/, function (m, n, d) { return "Nouveaux jeux (" + n + " en " + (d ? d + " jours" : "1 mois") + ")"; }],
   [/^(\\d+) of (\\d+) players$/, "$1 joueurs sur $2"],
   [/^Updates: players seen in (the last month|the last (\\d+) days)$/, function (m, w, d) { return "Mises à jour : joueurs vus " + (d ? "ces " + d + " derniers jours" : "le dernier mois"); }],
@@ -564,7 +588,7 @@ window.confirm = function (text) { return nativeConfirm.call(window, LANG === "f
 var CATALOG = "https://raw.githubusercontent.com/gameport-project/gameport-catalog/main/v1/catalog.json";
 var DEVICES = ["quest", "pico", "phone", "tablet", "other"];
 var VERDICTS = { works: "Works", offline_only: "Offline only", fails: "Does not work" };
-var state = { env: "test", games: [], current: null, votes: [], counts: {}, onlyVoted: false, incompat: {}, reasons: [], view: "", playerId: null, statuses: {}, defaults: {}, defaultRows: [], extra: {}, unhandled: 0, waiting: {}, news: null, device: "all", ready: false };
+var state = { env: "test", games: [], current: null, votes: [], counts: {}, onlyVoted: false, mine: false, incompat: {}, reasons: [], view: "", playerId: null, statuses: {}, defaults: {}, defaultRows: [], extra: {}, unhandled: 0, waiting: {}, news: null, device: "all", ready: false };
 
 function el(tag, attrs, children) {
   var node = document.createElement(tag);
@@ -721,10 +745,14 @@ function textField(label, value, long) {
 function incompatibleForm(game, entry, labels, ids) {
   var reason = select(ids, entry ? entry.reason : ids[0], labels);
   var where = devicesField(entry ? entry.devices : []);
-  var preview = el("p", { class: "muted" });
+  var preview = el("div", { class: "muted reason-preview" });
   var showText = function () {
     var r = state.reasons.filter(function (x) { return x.id === reason.value; })[0];
-    preview.textContent = r ? "EN: " + r.title.en + ": " + r.text.en + "  ·  FR: " + r.title.fr + " : " + r.text.fr : "";
+    preview.textContent = "";
+    if (!r) return;
+    // Each language on its own line, the title first: the two were run together in one paragraph.
+    preview.appendChild(el("p", {}, [el("b", { text: "EN" }), document.createTextNode(r.title.en + ": " + r.text.en)]));
+    preview.appendChild(el("p", {}, [el("b", { text: "FR" }), document.createTextNode(r.title.fr + " : " + r.text.fr)]));
   };
   reason.addEventListener("change", showText);
   showText();
@@ -764,7 +792,7 @@ function drawIncompatible() {
   children.push(incompatibleForm(g, null, labels, ids));
   // Folded: it is rarely used, and it pushed the votes down the page. The line says where the game stands.
   var summary = el("summary", { text: own.length ? "Incompatible: " + own.map(function (e) { return labels[e.reason] || e.reason; }).join(", ") : "Compatibility: not marked as incompatible" });
-  var box = el("details", { class: "incompat" + (own.length ? " is-incompatible" : "") }, [summary, el("div", { class: "stack" }, children)]);
+  var box = el("details", { class: "incompat" + (own.length ? " is-incompatible" : "") }, [summary, el("div", { class: "incompat-body" }, children)]);
   holder.appendChild(box);
 }
 
@@ -849,6 +877,63 @@ function devicesField(initial) {
   };
 }
 
+/**
+ * A field to choose several games: what is typed filters the catalog by name (or by app id) in a menu, a click adds a game as a chip in the box and the menu stays open for the next one.
+ * value() gives the games chosen; [onChange] is told at each change. The same box as the one for devices.
+ */
+function gamesField(onChange) {
+  var items = [];
+  var matches = [];
+  var chips = el("span", { class: "dev-chips" });
+  var input = el("input", { type: "text", class: "dev-input", "aria-label": "Add a game", placeholder: "Add a game: type its name", maxlength: "60", autocomplete: "off" });
+  var menu = el("div", { class: "dev-menu", hidden: "hidden" });
+  var box = el("div", { class: "dev-box games-box" }, [chips, input, menu]);
+
+  function has(game) { return items.some(function (i) { return i.appid === game.appid; }); }
+  function changed() { if (onChange) onChange(); }
+  function add(game) {
+    if (!game || has(game)) return;
+    items.push(game);
+    input.value = "";
+    drawChips();
+    suggest();
+    changed();
+    input.focus();
+  }
+  function drawChips() {
+    chips.textContent = "";
+    items.forEach(function (game, index) {
+      chips.appendChild(el("span", { class: "dev-chip" }, [
+        el("span", { text: game.name }),
+        el("button", { type: "button", class: "dev-x", "aria-label": "Remove", text: "×", onclick: function () { items.splice(index, 1); drawChips(); suggest(); changed(); } }),
+      ]));
+    });
+  }
+  function suggest() {
+    var text = input.value.trim().toLowerCase();
+    var all = allGames();
+    matches = all.filter(function (g) { return !has(g) && (!text || g.name.toLowerCase().indexOf(text) >= 0 || String(g.appid) === text); }).slice(0, 40);
+    // A number the catalog does not know can still be added as it is.
+    if (/^[0-9]{3,10}$/.test(text) && !has({ appid: Number(text) }) && !all.some(function (g) { return String(g.appid) === text; })) matches.unshift({ appid: Number(text), name: "App " + text });
+    menu.textContent = "";
+    matches.forEach(function (game) {
+      menu.appendChild(el("button", { type: "button", class: "dev-option", text: game.name, onmousedown: function (event) { event.preventDefault(); add(game); } }));
+    });
+    if (!matches.length) menu.appendChild(el("p", { class: "muted dev-none", text: "No game found." }));
+    menu.hidden = false;
+  }
+  input.addEventListener("focus", suggest);
+  input.addEventListener("input", suggest);
+  input.addEventListener("blur", function () { menu.hidden = true; });
+  input.addEventListener("keydown", function (event) {
+    if (event.key === "Enter") { event.preventDefault(); if (matches.length) add(matches[0]); }
+    else if (event.key === "Backspace" && !input.value && items.length) { items.pop(); drawChips(); suggest(); changed(); }
+    else if (event.key === "Escape") menu.hidden = true;
+  });
+  drawChips();
+  return { node: box, value: function () { return items.slice(); } };
+}
+
 /** The devices of a game in a few words, or nothing when it is incompatible everywhere. */
 function devicesText(devices) {
   return devices && devices.length ? "Only on: " + devices.join(", ") : "";
@@ -882,34 +967,24 @@ function drawIncompatibleList() {
   state.reasons.forEach(function (r) { labels[r.id] = title(r); });
   var ids = state.reasons.map(function (r) { return r.id; });
 
-  // Adding: a game found by its name or its number, then the reason.
-  var picked = null;
-  var search = textField("Search a game by name or app id");
-  var results = el("div", { class: "stack" });
-  var chosenLine = el("p", { class: "muted", text: "Chosen game" });
+  // Adding: games chosen in a dropdown by their name, then the reason and the devices. Every game chosen is marked in one go.
   var reason = select(ids, ids[0], labels);
   var where = devicesField([]);
-  var mark = el("button", { type: "button", class: "btn fill", text: "Mark as incompatible", onclick: function () {
-    if (!picked) { toast("Choose a game first.", true); return; }
-    if (!confirmWrite("Mark as incompatible: " + picked.name + " (" + labels[reason.value] + "). The app and the site show it at once.")) return;
-    call("/console/api/incompatible-set", { env: state.env, appId: picked.appid, name: picked.name, reason: reason.value, devices: where.value() }).then(function () { toast("Saved"); picked = null; loadIncompatible(); }).catch(function (e) { toast(e.message, true); });
-  } });
-  var choose = function (game) {
-    picked = game;
-    chosenLine.textContent = game.name + " (" + game.appid + ")";
-    chosenLine.className = "";
-    results.textContent = "";
-  };
-  search.addEventListener("input", function () {
-    var q = search.value.trim().toLowerCase();
-    results.textContent = "";
-    if (q.length < 2) return;
-    var found = allGames().filter(function (g) { return g.name.toLowerCase().indexOf(q) >= 0 || String(g.appid) === q; }).slice(0, 8);
-    if (/^[0-9]{1,10}$/.test(q) && !found.some(function (g) { return String(g.appid) === q; })) found.unshift({ appid: Number(q), name: "App " + q });
-    if (!found.length) { results.appendChild(el("p", { class: "muted", text: "No game found." })); return; }
-    found.forEach(function (g) { results.appendChild(el("button", { type: "button", class: "btn", text: g.name + " (" + g.appid + ")", onclick: function () { choose(g); } })); });
+  var mark = el("button", { type: "button", class: "btn fill", text: "Mark as incompatible" });
+  var chosen = gamesField(function () {
+    var count = chosen.value().length;
+    mark.textContent = count > 1 ? "Mark " + count + " games as incompatible" : "Mark as incompatible";
   });
-  panel.appendChild(el("div", { class: "add stack" }, [el("strong", { text: "Add a game to a reason" }), search, results, chosenLine, reason, el("small", { class: "muted", text: "Limited to these devices (none chosen: every device)" }), where.node, mark]));
+  mark.addEventListener("click", function () {
+    var picked = chosen.value();
+    if (!picked.length) { toast("Choose a game first.", true); return; }
+    var devices = where.value();
+    if (!confirmWrite("Mark as incompatible: " + picked.map(function (g) { return g.name; }).join(", ") + " (" + labels[reason.value] + "). The app and the site show it at once.")) return;
+    picked.reduce(function (chain, game) {
+      return chain.then(function () { return call("/console/api/incompatible-set", { env: state.env, appId: game.appid, name: game.name, reason: reason.value, devices: devices }); });
+    }, Promise.resolve()).then(function () { toast("Saved"); loadIncompatible(); }).catch(function (e) { toast(e.message, true); loadIncompatible(); });
+  });
+  panel.appendChild(el("div", { class: "add stack" }, [el("strong", { text: "Add games to a reason" }), chosen.node, reason, el("small", { class: "muted", text: "Limited to these devices (none chosen: every device)" }), where.node, mark]));
 
   // The list, by reason.
   var any = false;
@@ -1081,6 +1156,29 @@ function syncUrl() {
   if (location.pathname + location.search !== path) history.pushState(null, "", path);
 }
 
+/** The games the developer owns, kept in this browser only (never sent anywhere, never in the repository): the app ids pasted in the list, for the filter "My games". */
+var MINE_KEY = "gp-console-my-games";
+var mineSet = {};
+function readMine() {
+  try { var raw = JSON.parse(localStorage.getItem(MINE_KEY) || "[]"); return Array.isArray(raw) ? raw.filter(function (n) { return Number.isInteger(n) && n > 0; }) : []; } catch (e) { return []; }
+}
+/** Keeps [list] as the list of my games; [keepText] leaves the box as typed (the list is kept while it is being pasted). */
+function setMine(list, keepText) {
+  mineSet = {};
+  list.forEach(function (n) { mineSet[n] = true; });
+  try { localStorage.setItem(MINE_KEY, JSON.stringify(list)); } catch (e) {}
+  document.getElementById("mine-count").textContent = list.length ? "(" + list.length + ")" : "";
+  if (!keepText) document.getElementById("mine-text").value = list.join(" ");
+  if (!list.length && state.mine) { state.mine = false; document.getElementById("mine").setAttribute("aria-pressed", "false"); }
+}
+/** Adds a game to the list of my games, or takes it off: the button on the image of the game. */
+function toggleMine(appid) {
+  var list = readMine();
+  var at = list.indexOf(appid);
+  if (at === -1) list.push(appid); else list.splice(at, 1);
+  setMine(list);
+  if (state.mine) drawGames();
+}
 function drawGames() {
   syncUrl();
   var q = document.getElementById("q").value.trim().toLowerCase();
@@ -1092,6 +1190,7 @@ function drawGames() {
   box.textContent = "";
   var shown = allGames().filter(function (g) {
     if ((state.onlyVoted || state.device !== "all") && !deviceCounts(state.counts[g.appid])) return false;
+    if (state.mine && !mineSet[g.appid]) return false;
     // The status a game shows (the colour of its badge, for the chosen device): only the games whose status is ticked, none that has no vote.
     var ticked = Object.keys(state.statuses).filter(function (k) { return state.statuses[k]; });
     if (ticked.length) {
@@ -1115,6 +1214,75 @@ function drawGames() {
       n ? el("span", { class: "n n-" + majority(n), text: String(n.total) }) : null,
     ]));
   });
+}
+
+/** The newest release of GamePort, asked of the relay once a day and kept in this browser (one per environment), to fill in the version of a vote added by hand. */
+function loadNewestRelease() {
+  var key = "gp-console-newest-release-" + state.env;
+  var today = new Date().toISOString().slice(0, 10);
+  try {
+    var kept = JSON.parse(localStorage.getItem(key) || "null");
+    if (kept && kept.day === today && kept.version) return Promise.resolve(kept.version);
+  } catch (e) { /* asked again */ }
+  return call("/console/api/newest-release?env=" + state.env).then(function (data) {
+    try { if (data.version) localStorage.setItem(key, JSON.stringify({ day: today, version: data.version })); } catch (e) { /* not kept */ }
+    return data.version;
+  });
+}
+
+/** The button on the image of a game: adds it to the list "My games", or takes it off. */
+function mineButton(appid) {
+  var button = el("button", { type: "button", class: "btn glass" });
+  var paint = function () {
+    var on = !!mineSet[appid];
+    button.setAttribute("aria-pressed", String(on));
+    button.textContent = on ? "In my list" : "Add to my list";
+  };
+  button.addEventListener("click", function () { toggleMine(appid); paint(); });
+  paint();
+  return button;
+}
+
+/** The history of the price of a game, in euros, from the catalog repository like in the app: on the image, what it is worth now, the price curve, and the lowest price with its day. */
+var PRICES = CATALOG.replace("catalog.json", "prices");
+function money(cents) {
+  try { return new Intl.NumberFormat(LANG === "fr" ? "fr-FR" : "en-GB", { style: "currency", currency: "EUR" }).format(cents / 100); } catch (e) { return (cents / 100).toFixed(2) + " €"; }
+}
+var PRICE_VERDICTS = { lowest: "Lowest price seen", great: "Great price", good: "Good price", fair: "Fair price", wait: "Better to wait", usual: "Usual price" };
+/** Whether the price now is worth it, by what the history has seen (the same thresholds as the app): null when there is too little history. */
+function priceVerdict(rows, now, lowestCents) {
+  if (rows.length < 2) return null;
+  var price = now[1];
+  var onSale = now[2] !== null && now[2] !== undefined && now[2] > price;
+  var sales = rows.some(function (r) { return r[1] !== null && r[1] !== undefined && r[2] !== null && r[2] !== undefined && r[2] > r[1]; });
+  if (price <= lowestCents) return "lowest";
+  if (!onSale && !sales) return "usual";
+  if (price * 100 <= lowestCents * 115) return "great";
+  if (onSale && price * 100 <= lowestCents * 135) return "good";
+  if (onSale) return "fair";
+  return sales ? "wait" : "usual";
+}
+function drawPrice(hero, appid, game) {
+  fetch(PRICES + "/history/" + appid + ".json").then(function (r) { if (!r.ok) throw new Error("no history"); return r.json(); }).then(function (data) {
+    if (state.current !== game) return;
+    var rows = ((data && data.lines) || {}).fr || [];
+    var priced = rows.filter(function (r) { return r[1] !== null && r[1] !== undefined; });
+    if (!priced.length || priced.every(function (r) { return r[1] === 0; })) return;
+    var lowest = priced.reduce(function (m, r) { return r[1] < m[1] ? r : m; }, priced[0]);
+    var now = priced[priced.length - 1];
+    var nowOff = now[2] !== null && now[2] !== undefined && now[2] > now[1] ? Math.floor((now[2] - now[1]) * 100 / now[2]) : 0;
+    var lowOff = lowest[2] !== null && lowest[2] !== undefined && lowest[2] > lowest[1] ? Math.floor((lowest[2] - lowest[1]) * 100 / lowest[2]) : 0;
+    var verdict = priceVerdict(rows, now, lowest[1]);
+    // One discreet line under the title, on the image: the price now, the lowest price seen with its day, and what the history says of it.
+    hero.firstChild.appendChild(el("div", { class: "hero-price" + (verdict ? " pv-" + verdict : "") }, [
+      el("small", { text: "Now" }),
+      document.createTextNode(" " + money(now[1]) + (nowOff ? " (-" + nowOff + " %)" : "") + " · "),
+      el("small", { text: "Lowest" }),
+      document.createTextNode(" " + money(lowest[1]) + (lowOff ? " (-" + lowOff + " %)" : "") + " · " + formatDay(lowest[0])),
+      verdict ? document.createTextNode(" · ") : null,
+      verdict ? el("span", { class: "hp-chip", text: PRICE_VERDICTS[verdict] }) : null,
+    ]));
+  }).catch(function () {});
 }
 
 function loadVotes() {
@@ -2071,6 +2239,9 @@ function drawDetail() {
     el("h2", { text: g.name }),
     el("div", { class: "meta", text: (g.extra ? "Not in the catalog" + (g.type ? " · " + g.type : "") : (g.vr ? "VR" : "Flat")) + " · App " + g.appid + (g.installable || g.extra ? "" : " · not published yet") + (g.why ? " · name unknown: " + g.why : "") }),
   ])]);
+  // On the image: the button of the list "My games", and the history of the price (in euros, for the developer).
+  hero.appendChild(mineButton(g.appid));
+  drawPrice(hero, g.appid, g);
   // The demos of this game (apps of the catalog whose parent it is), or the game a demo belongs to: a link opens each in the console, another goes to Steam.
   var demos = state.games.filter(function (d) { return d.parent === g.appid && d.type === "demo"; });
   var parentGame = g.parent ? state.games.filter(function (d) { return d.appid === g.parent; })[0] : null;
@@ -2135,10 +2306,45 @@ function drawDetail() {
   drawGameDefaults();
 
   var device = select(DEVICES, "quest");
+  // The precise device, by the kind picked: the headsets of that brand for a Quest or a Pico, a search in the list of devices for the others (the same choices as when a vote is changed).
+  var addModel = "";
+  var addFound = {};
+  var addModelBox = el("span", { class: "model-box" });
+  var drawAddModel = function () {
+    addModelBox.textContent = "";
+    var kind = device.value;
+    if (kind === "quest" || kind === "pico") {
+      var labels = { "": "Not specified" };
+      (state.deviceChoices || []).filter(function (c) { return c.kind === kind; }).forEach(function (c) { labels[c.model] = c.label; });
+      var menu = select(Object.keys(labels), addModel, labels);
+      menu.addEventListener("change", function () { addModel = menu.value; });
+      addModelBox.appendChild(menu);
+    } else {
+      var list = el("datalist", { id: "add-models" });
+      var typed = el("input", { type: "text", list: "add-models", placeholder: "Search a model" });
+      typed.addEventListener("input", function () {
+        var text = typed.value.trim();
+        if (text === "") { addModel = ""; return; }
+        if (addFound[text]) { addModel = addFound[text]; return; }
+        if (text.length < 2) return;
+        call("/console/api/models?q=" + encodeURIComponent(text)).then(function (data) {
+          list.textContent = "";
+          addFound = {};
+          data.models.forEach(function (m) { var name = m.label + " (" + m.model + ")"; addFound[name] = m.model; list.appendChild(el("option", { value: name })); });
+        }).catch(function () {});
+      });
+      addModelBox.appendChild(typed);
+      addModelBox.appendChild(list);
+    }
+  };
+  device.addEventListener("change", function () { addModel = ""; drawAddModel(); });
+  drawAddModel();
   var verdict = select(Object.keys(VERDICTS), "works", VERDICTS);
   var offline = el("input", { type: "checkbox", id: "add-offline" });
   var offlineLabel = el("label", { class: "muted" }, [offline, document.createTextNode(" tried offline")]);
   var version = el("input", { type: "text", class: "field wide", "aria-label": "GamePort version", placeholder: "GamePort version (empty: the newest release)", maxlength: "32" });
+  // Filled in with the newest release, so a vote added by hand comes from it unless another is typed.
+  loadNewestRelease().then(function (newest) { if (newest && !version.value) version.value = newest; }).catch(function () {});
   // What went wrong, to tick (several) for a vote that says something did: a dropdown with a box for each.
   var pressed = {};
   var multiSummary = el("summary", { text: "Problems: none" });
@@ -2161,15 +2367,16 @@ function drawDetail() {
     var typed = version.value.trim();
     if (typed && !/^[0-9A-Za-z._-]{1,32}$/.test(typed)) { toast("The version: letters, digits, dots, dashes only", true); return; }
     if (typed) message.app = typed;
+    if (addModel) message.model = addModel;
     var ticked = Object.keys(ISSUE_LABELS).filter(function (code) { return pressed[code]; });
     if (verdict.value !== "works" && ticked.length) message.issues = ticked;
-    if (!confirmWrite("Add a vote: " + g.name + ", " + device.value + ", " + VERDICTS[verdict.value] + ".")) return;
+    if (!confirmWrite("Add a vote: " + g.name + ", " + device.value + (addModel ? " (" + addModel + ")" : "") + ", " + VERDICTS[verdict.value] + ".")) return;
     call("/console/api/add", message).then(function () { toast("Vote added"); loadVotes(); loadCounts().then(drawGames); }).catch(function (e) { toast(e.message, true); });
   } });
   // Folded: it is a testing tool, and an open form invites a vote nobody meant to add.
   panel.appendChild(el("details", { class: "incompat" }, [
     el("summary", { text: "New vote (to try the console)" }),
-    el("div", { class: "add" }, [device, verdict, ticks, version, offlineLabel, add]),
+    el("div", { class: "add" }, [device, addModelBox, verdict, ticks, version, offlineLabel, add]),
   ]));
 
   var reports = el("div");
@@ -2405,6 +2612,24 @@ document.getElementById("home").addEventListener("click", showHome);
 Array.prototype.forEach.call(document.querySelectorAll("#lang button"), function (b) { b.addEventListener("click", function () { setLang(b.getAttribute("data-lang")); }); });
 document.getElementById("brand").addEventListener("click", function (event) { event.preventDefault(); showHome(); });
 document.getElementById("news").addEventListener("click", showNews);
+document.getElementById("mine").addEventListener("click", function () {
+  // With no list yet the button opens it, rather than doing nothing.
+  if (!Object.keys(mineSet).length) { document.getElementById("mine-box").open = true; document.getElementById("mine-text").focus(); return; }
+  state.mine = !state.mine;
+  this.setAttribute("aria-pressed", String(state.mine));
+  drawGames();
+});
+var mineTimer = null;
+document.getElementById("mine-text").addEventListener("input", function () {
+  var text = this.value;
+  clearTimeout(mineTimer);
+  mineTimer = setTimeout(function () {
+    var ids = (text.match(/[0-9]{3,10}/g) || []).map(Number).filter(function (n, i, all) { return all.indexOf(n) === i; });
+    setMine(ids, true);
+    drawGames();
+  }, 300);
+});
+(function () { setMine(readMine()); })();
 document.getElementById("only").addEventListener("click", function () {
   state.onlyVoted = !state.onlyVoted;
   this.setAttribute("aria-pressed", String(state.onlyVoted));
