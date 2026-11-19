@@ -18,7 +18,10 @@ button, input, select { font:inherit; color:inherit; }
 .banner { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:16px; flex-wrap:wrap; padding:12px 24px; background:rgba(20,25,34,.74); -webkit-backdrop-filter:blur(18px); backdrop-filter:blur(18px); border-bottom:1px solid var(--line); box-shadow:inset 0 3px 0 var(--env), 0 10px 30px rgba(0,0,0,.3); color:var(--text); font-weight:600; letter-spacing:.01em; }
 .brand { display:flex; line-height:0; }
 .pages { display:flex; flex-wrap:wrap; gap:8px; }
-.banner-btn { border:1px solid var(--line); background:rgba(255,255,255,.05); color:var(--text); cursor:pointer; padding:7px 16px; border-radius:999px; font:inherit; font-weight:600; transition:background .15s, border-color .15s; }
+.banner-btn { display:inline-flex; align-items:center; gap:8px; border:1px solid var(--line); background:rgba(255,255,255,.05); color:var(--text); cursor:pointer; padding:7px 16px; border-radius:999px; font:inherit; font-weight:600; text-decoration:none; transition:background .15s, border-color .15s; }
+.banner-btn svg { width:16px; height:16px; flex:none; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; opacity:.85; }
+.banner-btn .badge { margin-left:0; }
+.badge[hidden] { display:none; }
 .banner-btn:hover { background:rgba(255,255,255,.12); border-color:rgba(255,255,255,.3); }
 .switch { display:flex; gap:2px; padding:3px; border-radius:999px; background:rgba(255,255,255,.06); border:1px solid var(--line); }
 .switch button { border:0; background:none; cursor:pointer; padding:6px 16px; border-radius:999px; font-weight:700; font-size:13px; letter-spacing:.06em; color:var(--muted); transition:background .15s, color .15s; }
@@ -328,12 +331,13 @@ a.btn { display:inline-flex; align-items:center; text-decoration:none; }
     <button type="button" id="b-prod" aria-pressed="false">PRODUCTION</button>
   </div>
   <nav class="pages" aria-label="Pages">
-    <button type="button" class="banner-btn" id="home">Home</button>
-    <button type="button" class="banner-btn" id="latest">Latest reports<span class="badge" id="latest-count" hidden></span></button>
-    <button type="button" class="banner-btn" id="news">What is new<span class="badge" id="news-count" hidden></span></button>
-    <button type="button" class="banner-btn" id="incompatible">Incompatible games</button>
-    <button type="button" class="banner-btn" id="reasons">Incompatibility reasons</button>
-    <button type="button" class="banner-btn" id="defaults">Game settings</button>
+    <a class="banner-btn" id="home" href="/console/test"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg>Home</a>
+    <a class="banner-btn" id="latest" href="/console/test/reports"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/></svg>Latest reports<span class="badge" id="latest-count" hidden></span></a>
+    <a class="banner-btn" id="news" href="/console/test/news"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/></svg>What is new<span class="badge" id="news-count" hidden></span></a>
+    <a class="banner-btn" id="players" href="/console/test/players"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.5 3-6 6.5-6s6.5 2.5 6.5 6"/><circle cx="17" cy="9" r="2.5"/><path d="M17 14c2.5 0 4.5 2 4.5 5"/></svg>Players</a>
+    <a class="banner-btn" id="incompatible" href="/console/test/incompatible"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>Incompatible games</a>
+    <a class="banner-btn" id="reasons" href="/console/test/reasons"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg>Incompatibility reasons</a>
+    <a class="banner-btn" id="defaults" href="/console/test/defaults"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h8M18 6h2M4 12h2M12 12h8M4 18h10M20 18h0"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>Game settings</a>
   </nav>
   <div class="seg-fine lang-pick" id="lang" role="group" aria-label="Language">
     <button type="button" data-lang="fr" aria-pressed="false">FR</button>
@@ -445,7 +449,9 @@ var FR = {
   "Reading: among the players who answered during the first 7 days of a version, this share was already on it. Only players who answer are seen.": "Lecture : parmi les joueurs qui ont répondu pendant les 7 premiers jours d'une version, cette part était déjà dessus. Seuls les joueurs qui répondent sont vus.",
   "Players": "Joueurs", "All Quest": "Tous les Quest", "All Pico": "Tous les Pico", "All phones": "Tous les téléphones", "All tablets": "Toutes les tablettes", "All other devices": "Tous les autres appareils", "Verdict": "Verdict", "No game here.": "Aucun jeu ici.", "Phones": "Téléphones", "Tablets": "Tablettes", "Other": "Autres", "now": "en ce moment", "last 31 days": "31 derniers jours", "month": "mois", "Players concerned": "Joueurs concernés", "Updated": "Mis à jour", "Usual wait": "Délai habituel", "the same day": "le même jour", "Do not work": "Ne marchent pas",
   "Only players who answered in this period are counted, and only those who were already there before a version came out. Of them, the share whose last answer is on that version or a newer one.": "Seuls les joueurs qui ont répondu sur cette période sont comptés, et seulement ceux qui étaient déjà là avant la sortie d'une version. Parmi eux, la part dont la dernière réponse est sur cette version ou une plus récente.",
-  "No player seen in this period was there before this version": "Aucun joueur vu sur cette période n'était là avant cette version", "Sort": "Trier"
+  "No player seen in this period was there before this version": "Aucun joueur vu sur cette période n'était là avant cette version", "Sort": "Trier",
+  "Players": "Joueurs", "The players with a name: the one you gave them, or the Discord name they typed. A name opens everything the player sent.": "Les joueurs qui ont un nom : celui que tu leur as donné, ou le pseudo Discord qu'ils ont saisi. Un nom ouvre tout ce que le joueur a envoyé.",
+  "Filter by name": "Filtrer par nom", "No player matches.": "Aucun joueur ne correspond.", "No player with a name yet.": "Aucun joueur avec un nom pour l'instant."
 };
 
 // Sentences made of a number and a word, or of fixed words around a name. Each rule is tried on every text, in this order.
@@ -626,9 +632,22 @@ function confirmWrite(text) {
   return state.env !== "prod" || window.confirm("PRODUCTION\\n\\n" + text + "\\n\\nThis changes the real votes at once.");
 }
 
+var NAV_PATHS = { home: "", latest: "/reports", news: "/news", players: "/players", incompatible: "/incompatible", reasons: "/reasons", defaults: "/defaults" };
+
+/** A click on a link of the bar opens the page here; with a key held or the middle button, the browser opens the link as it does for any link. */
+function navClick(show) {
+  return function (event) {
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    show();
+  };
+}
+
 function setEnv(env) {
   state.env = env;
   document.getElementById("brand").setAttribute("href", "/console/" + env);
+  // The links of the bar open their page in a new tab from the context menu, so they point to the page of the set that is shown.
+  Object.keys(NAV_PATHS).forEach(function (id) { document.getElementById(id).setAttribute("href", "/console/" + env + NAV_PATHS[id]); });
   syncUrl();
   document.body.className = env;
   document.getElementById("b-test").setAttribute("aria-pressed", String(env === "test"));
@@ -642,6 +661,7 @@ function setEnv(env) {
     if (state.view === "reports") showLatestReports();
     else if (state.view === "news") showNews();
     else if (state.view === "defaults") showDefaults();
+    else if (state.view === "players") showPlayers();
     else if (state.view === "home") showHome();
     else if (state.view === "player" && state.playerId) showPlayer(state.playerId);
     else if (state.view === "group" && state.groupKind) showGroup(state.groupKind, state.groupValue);
@@ -1151,7 +1171,7 @@ function majority(c) {
 /** The address says the set and what is open (/console/prod/1125240, /console/test/news): a refresh, a copied link or a bookmark comes back to the same place. */
 function syncUrl() {
   if (!state.ready) return;
-  var tail = state.view === "player" && state.playerId ? "/player/" + state.playerId : state.view === "group" && state.groupKind ? "/" + state.groupKind + "/" + encodeURIComponent(state.groupValue) : state.view === "game" && state.current ? "/" + state.current.appid : state.view === "reports" || state.view === "news" || state.view === "reasons" || state.view === "incompatible" || state.view === "defaults" ? "/" + state.view : "";
+  var tail = state.view === "player" && state.playerId ? "/player/" + state.playerId : state.view === "group" && state.groupKind ? "/" + state.groupKind + "/" + encodeURIComponent(state.groupValue) : state.view === "game" && state.current ? "/" + state.current.appid : state.view === "reports" || state.view === "news" || state.view === "reasons" || state.view === "incompatible" || state.view === "defaults" || state.view === "players" ? "/" + state.view : "";
   var path = "/console/" + state.env + tail + (state.onlyVoted ? "?voted" : "");
   if (location.pathname + location.search !== path) history.pushState(null, "", path);
 }
@@ -2089,6 +2109,43 @@ function dayOffset(offset) {
 }
 
 /** The news: the votes saved since the last visit and the games that came to Android, with a filter on the days. Opening them marks them as seen. */
+/** The players the developer can name, one row each: the name (a link to everything the player sent), the devices, the games answered and how they split. */
+function showPlayers() {
+  state.current = null;
+  state.view = "players";
+  drawGames();
+  var panel = document.getElementById("detail");
+  panel.textContent = "";
+  panel.appendChild(el("h2", { text: "Players (" + (state.env === "prod" ? "production" : "test") + ")" }));
+  panel.appendChild(el("p", { class: "muted", text: "The players with a name: the one you gave them, or the Discord name they typed. A name opens everything the player sent." }));
+  var filter = el("input", { class: "field", type: "search", placeholder: "Filter by name", "aria-label": "Filter by name" });
+  panel.appendChild(el("div", { class: "player-edit" }, [filter]));
+  var host = el("div");
+  panel.appendChild(host);
+  call("/console/api/players?env=" + state.env).then(function (data) {
+    if (state.view !== "players") return;
+    var paint = function () {
+      var wanted = filter.value.trim().toLowerCase();
+      var shown = data.players.filter(function (p) { return !wanted || p.label.toLowerCase().indexOf(wanted) >= 0; });
+      host.textContent = "";
+      if (!shown.length) { host.appendChild(el("p", { class: "muted", text: data.players.length ? "No player matches." : "No player with a name yet." })); return; }
+      var table = el("table", { class: "rank" }, [el("thead", {}, [el("tr", {}, ["Player", "Games", "Work / not", "Answers", "Reports"].map(function (h) { return el("th", { text: h }); }))])]);
+      var body = el("tbody");
+      shown.forEach(function (p) {
+        var who = el("div", { class: "who" }, [playerLink(p.voter, p.label, true, true)]);
+        if (p.devices && p.devices.length) who.appendChild(el("div", { class: "who-dev" }, p.devices.slice(0, 3).map(function (name) { return deviceLink({ deviceName: name }, deviceShown(name)); })));
+        var parts = [["seg-works", p.works, "work"], ["seg-offline_only", p.offline_only, "work offline only"], ["seg-fails", p.fails, "do not work"]];
+        body.appendChild(el("tr", {}, [el("td", {}, [who]), el("td", { text: String(p.games) }), el("td", { class: "split" }, [stackBar(parts, p.games)]), el("td", { text: String(p.answers) }), el("td", { text: String(p.reports) })]));
+      });
+      table.appendChild(body);
+      host.appendChild(table);
+      host.appendChild(el("p", { class: "muted", text: shown.length + (shown.length === 1 ? " player" : " players") }));
+    };
+    filter.addEventListener("input", paint);
+    paint();
+  }).catch(function (e) { toast(e.message, true); });
+}
+
 function showNews() {
   state.current = null;
   state.view = "news";
@@ -2604,14 +2661,15 @@ document.getElementById("device").addEventListener("change", function () {
   drawGames();
   if (state.view === "game" && state.current) drawDetail();
 });
-document.getElementById("latest").addEventListener("click", showLatestReports);
-document.getElementById("reasons").addEventListener("click", showReasons);
-document.getElementById("incompatible").addEventListener("click", showIncompatible);
-document.getElementById("defaults").addEventListener("click", showDefaults);
-document.getElementById("home").addEventListener("click", showHome);
+document.getElementById("latest").addEventListener("click", navClick(showLatestReports));
+document.getElementById("reasons").addEventListener("click", navClick(showReasons));
+document.getElementById("incompatible").addEventListener("click", navClick(showIncompatible));
+document.getElementById("defaults").addEventListener("click", navClick(showDefaults));
+document.getElementById("players").addEventListener("click", navClick(showPlayers));
+document.getElementById("home").addEventListener("click", navClick(showHome));
 Array.prototype.forEach.call(document.querySelectorAll("#lang button"), function (b) { b.addEventListener("click", function () { setLang(b.getAttribute("data-lang")); }); });
 document.getElementById("brand").addEventListener("click", function (event) { event.preventDefault(); showHome(); });
-document.getElementById("news").addEventListener("click", showNews);
+document.getElementById("news").addEventListener("click", navClick(showNews));
 document.getElementById("mine").addEventListener("click", function () {
   // With no list yet the button opens it, rather than doing nothing.
   if (!Object.keys(mineSet).length) { document.getElementById("mine-box").open = true; document.getElementById("mine-text").focus(); return; }
@@ -2640,7 +2698,7 @@ fetch(CATALOG).then(function (r) { return r.json(); }).then(function (data) {
   state.games = data.apps.slice().sort(function (a, b) { return a.name.localeCompare(b.name); });
   // The address says what to open: /console/prod/1125240 a game in production, /console/test/reports or /news or /reasons a page, ?voted only the games with votes.
   // The old addresses (#1125240/prod, #reports, #voted) still open the same thing, and are rewritten.
-  var route = location.pathname.match(/^\\/console\\/(test|prod)(?:\\/(\\d+|reports|news|reasons|incompatible|defaults|player\\/[0-9a-f]{12}|version\\/\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(?:-alpha\\.\\d{1,5})?|device\\/[\\w%.\\-:]{1,80}))?\\/?$/);
+  var route = location.pathname.match(/^\\/console\\/(test|prod)(?:\\/(\\d+|reports|news|reasons|incompatible|defaults|players|player\\/[0-9a-f]{12}|version\\/\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(?:-alpha\\.\\d{1,5})?|device\\/[\\w%.\\-:]{1,80}))?\\/?$/);
   var env = route ? route[1] : "test";
   var section = route ? route[2] : null;
   var old = location.hash.match(/^#(?:(\\d+)|(reports))(\\/prod)?$/);
@@ -2652,6 +2710,7 @@ fetch(CATALOG).then(function (r) { return r.json(); }).then(function (data) {
   else if (section === "reasons") showReasons();
   else if (section === "incompatible") showIncompatible();
   else if (section === "defaults") showDefaults();
+  else if (section === "players") showPlayers();
   else if (!section) showHome();
   else if (section && section.indexOf("player/") === 0) showPlayer(section.slice(7));
   else if (section && section.indexOf("version/") === 0) showGroup("version", section.slice(8));

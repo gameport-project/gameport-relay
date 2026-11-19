@@ -666,6 +666,28 @@ describe("the players", () => {
     assert.ok(answer.reports.every((r) => !("data" in r)));
   });
 
+  it("lists the players that have a name, by name, with their devices, the games they answered, how those split and their reports", async () => {
+    vote(5, "aaaaaaaaaaaa", { verdict: "works", device: "pico" });
+    vote(6, "aaaaaaaaaaaa", { verdict: "fails", device: "pico" });
+    vote(5, "bbbbbbbbbbbb", { verdict: "works", device: "pico" });
+    vote(5, "cccccccccccc", { verdict: "works", device: "pico" });
+    db.prepare("UPDATE vote_history SET model = 'A92Y0', codename = 'sparrow' WHERE voter = 'aaaaaaaaaaaa'").run();
+    report("reports", 5, "aaaaaaaaaaaa", "2026-10-09");
+    // Two have a name (the Discord name typed, and the developer's own); the third has none and is not listed.
+    db.prepare("INSERT INTO player_contacts (voter, discord, updated) VALUES ('aaaaaaaaaaaa', 'zed.typed', '2026-10-08')").run();
+    db.prepare("INSERT INTO player_labels (voter, label, updated) VALUES ('bbbbbbbbbbbb', 'Alice', '2026-10-09')").run();
+    const { players } = await (await ask("/console/api/players?env=prod")).json();
+    assert.deepEqual(players.map((p) => p.label), ["Alice", "zed.typed"]);
+    const zed = players[1];
+    assert.equal(zed.voter, "aaaaaaaaaaaa");
+    assert.deepEqual([zed.games, zed.works, zed.fails, zed.offline_only, zed.reports], [2, 1, 1, 0, 1]);
+    assert.deepEqual(zed.devices, ["Pico 4 Ultra"]);
+    assert.equal(players[0].reports, 0);
+    // The test set has none of them.
+    assert.deepEqual((await (await ask("/console/api/players?env=test")).json()).players, []);
+    assert.equal((await ask("/console/api/players?env=other")).status, 400);
+  });
+
   it("keeps the real set and the test set apart, and refuses a player that is not a hash or a set that is not one", async () => {
     vote(5, "aaaaaaaaaaaa");
     const test = await (await ask("/console/api/player?env=test&voter=aaaaaaaaaaaa")).json();

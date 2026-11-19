@@ -479,6 +479,42 @@ async function namesOf(environment, voters, env) {
   return names;
 }
 
+/**
+ * The page of the players: those the developer can name (a name given in the console, or the Discord name the player typed), by name, each with the devices they use, how many
+ * different games they answered, how those games split (work, work offline only, do not work), how many answers they sent over time and how many reports.
+ */
+async function playersList(url, env) {
+  const environment = url.searchParams.get("env");
+  const table = TABLES[environment];
+  if (!table) return json(400, { error: "bad env" });
+  // Every name there is, the developer's first: one read of each table, so no list of players has to be bound (a query takes few values).
+  const names = new Map();
+  for (const [source, column] of [[LABEL_TABLES[environment], "label"], [CONTACT_TABLES[environment], "discord"]]) {
+    try {
+      for (const row of (await env.DB.prepare(`SELECT voter, ${column} AS name FROM ${source}`).all()).results) if (row.name && !names.has(row.voter)) names.set(row.voter, row.name);
+    } catch {
+      // No such table yet (migration 0022).
+    }
+  }
+  const latest = (await env.DB.prepare(`SELECT app_id AS appId, voter, verdict, device, model, codename, fixed FROM ${table}`).all()).results.filter((row) => names.has(row.voter));
+  const countBy = async (query) => {
+    const counts = new Map();
+    try {
+      for (const row of (await env.DB.prepare(query).all()).results) counts.set(row.voter, row.n);
+    } catch {
+      // Nothing to count yet.
+    }
+    return counts;
+  };
+  const answers = await countBy(`SELECT voter, COUNT(*) AS n FROM ${HISTORY[table]} GROUP BY voter`);
+  const reports = await countBy(`SELECT voter, COUNT(*) AS n FROM ${REPORT_TABLES[environment]} GROUP BY voter`);
+  const nameOfRow = (row) => groupName(row.device, row.model, row.codename);
+  const players = topPlayersOf(latest, [], [], Infinity, nameOfRow)
+    .map((row) => ({ ...row, label: names.get(row.voter), answers: answers.get(row.voter) ?? 0, reports: reports.get(row.voter) ?? 0 }))
+    .sort((a, b) => a.label.localeCompare(b.label, "en", { sensitivity: "base" }) || (a.voter < b.voter ? -1 : 1));
+  return json(200, { players });
+}
+
 /** The moves of the players between two versions of GamePort among the lines of the history that match [where]; none when the database has no history yet. */
 async function changesWhere(environment, where, binds, env) {
   try {
@@ -777,7 +813,7 @@ async function setDefault(message, env, _table, environment) {
 const WRITES = { "/console/api/game-default-set": setDefault, "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove, "/console/api/report-handled": handleReport, "/console/api/incompatible-set": setIncompatible, "/console/api/reason-set": setReason, "/console/api/reason-remove": removeReason, "/console/api/incompatible-remove": removeIncompatible, "/console/api/seen": seen, "/console/api/player-label": setLabel };
 
 /** The page answers at /console and at an address that names the set and what is open: /console/prod, /console/test/1125240, /console/prod/version/0.9.4, /console/prod/reports, /console/prod/news, /console/test/reasons. */
-const PAGE_PATH = /^\/console\/?$|^\/console\/(test|prod)(\/(\d{1,10}|reports|news|reasons|incompatible|defaults|player\/[0-9a-f]{12}|version\/\d{1,3}\.\d{1,3}\.\d{1,3}(?:-alpha\.\d{1,5})?|device\/[\w%.\-:]{1,80}))?\/?$/;
+const PAGE_PATH = /^\/console\/?$|^\/console\/(test|prod)(\/(\d{1,10}|reports|news|reasons|incompatible|defaults|players|player\/[0-9a-f]{12}|version\/\d{1,3}\.\d{1,3}\.\d{1,3}(?:-alpha\.\d{1,5})?|device\/[\w%.\-:]{1,80}))?\/?$/;
 
 /** The routes of the console. Returns a response, or null when the path is not one of the console's. */
 export async function handleConsole(request, env, ctx) {
@@ -807,6 +843,7 @@ export async function handleConsole(request, env, ctx) {
     if (url.pathname === "/console/api/incompatible") return request.method === "GET" ? await listIncompatible(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/reports") return request.method === "GET" ? await listReports(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/game-defaults") return request.method === "GET" ? await listDefaults(url, env) : json(405, { error: "use GET" });
+    if (url.pathname === "/console/api/players") return request.method === "GET" ? await playersList(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/player") return request.method === "GET" ? await player(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/version") return request.method === "GET" ? await version(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/newest-release") return request.method === "GET" ? await newestReleaseOf(url, env) : json(405, { error: "use GET" });
