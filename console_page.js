@@ -2700,7 +2700,12 @@ function trailLine(v, withMarks) {
   box.appendChild(el("summary", { title: "Every answer of this player for the game" }, [withMarks ? transitionMarks(v.trail) : document.createTextNode("History")]));
   v.trail.forEach(function (t) {
     var ticked = t.issues ? " · " + t.issues.split(",").map(function (c) { return ISSUE_LABELS[c] || c; }).join(", ") : "";
-    box.appendChild(el("div", { class: "trail-line t-" + t.verdict, text: whenText(t) + " · " + (MARKS[t.verdict] || "?") + " " + VERDICTS[t.verdict] + " · GamePort " + t.app + (t.game ? " · build " + t.game : "") + ticked }));
+    // Only the mark and the answer are in the colour of the answer; the day, the version and what was ticked keep the colour of the text.
+    box.appendChild(el("div", { class: "trail-line" }, [
+      document.createTextNode(whenText(t) + " · "),
+      el("span", { class: "mk mk-" + t.verdict, text: (MARKS[t.verdict] || "?") + " " + VERDICTS[t.verdict] }),
+      document.createTextNode(" · GamePort " + t.app + (t.game ? " · build " + t.game : "") + ticked),
+    ]));
   });
   return box;
 }
