@@ -122,6 +122,14 @@ details.incompat.is-incompatible > summary { color:#ff9a9a; }
 .trail { margin-top:4px; font-size:12px; }
 .trail summary { cursor:pointer; opacity:.85; }
 .trail-line { margin:2px 0 0 14px; opacity:.8; }
+.mk { font-weight:700; }
+.ico { fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; vertical-align:middle; }
+.ico-warn { color:#f0b24a; } .ico-report-sent { color:#ef6b6b; } .ico-report-waiting { color:#f0b24a; } .ico-report-refused { color:#f0b24a; } .ico-report-none { color:var(--muted); }
+.tip { position:fixed; z-index:60; max-width:320px; padding:8px 12px; border-radius:10px; background:#1f2633; border:1px solid var(--line); box-shadow:0 10px 28px rgba(0,0,0,.45); font-size:13px; line-height:1.45; white-space:pre-line; pointer-events:none; opacity:0; transition:opacity .12s; }
+.tip.on { opacity:1; }
+.icon-cell { text-align:center; width:1%; white-space:nowrap; } .ico-tip { display:inline-block; cursor:help; line-height:0; }
+.ico-ans { stroke-width:3; } .ico-ans-works { color:#4cc38a; } .ico-ans-offline_only { color:#f0b24a; } .ico-ans-fails { color:#ef6b6b; } .ico-ans-none { color:var(--muted); }
+.mk-works { color:#4cc38a; } .mk-offline_only { color:#f0b24a; } .mk-fails { color:#ef6b6b; }
 .t-works { color:#4cc38a; } .t-offline_only { color:#f0b24a; } .t-fails { color:#ef6b6b; }
 .vote { display:grid; grid-template-columns:1fr auto; gap:8px 16px; align-items:center; padding:12px 16px; border-radius:12px; background:rgba(255,255,255,.04); border:1px solid var(--line); border-left:4px solid transparent; }
 .vote.v-works { border-left-color:#4cc38a; } .vote.v-offline_only { border-left-color:#f0b24a; } .vote.v-fails { border-left-color:#ef6b6b; }
@@ -451,7 +459,7 @@ var FR = {
   "Only players who answered in this period are counted, and only those who were already there before a version came out. Of them, the share whose last answer is on that version or a newer one.": "Seuls les joueurs qui ont répondu sur cette période sont comptés, et seulement ceux qui étaient déjà là avant la sortie d'une version. Parmi eux, la part dont la dernière réponse est sur cette version ou une plus récente.",
   "No player seen in this period was there before this version": "Aucun joueur vu sur cette période n'était là avant cette version", "Sort": "Trier",
   "Players": "Joueurs", "The players with a name: the one you gave them, or the Discord name they typed. A name opens everything the player sent.": "Les joueurs qui ont un nom : celui que tu leur as donné, ou le pseudo Discord qu'ils ont saisi. Un nom ouvre tout ce que le joueur a envoyé.",
-  "Filter by name": "Filtrer par nom", "No player matches.": "Aucun joueur ne correspond.", "No player with a name yet.": "Aucun joueur avec un nom pour l'instant."
+  "Filter by name": "Filtrer par nom", "History": "Historique", "No player matches.": "Aucun joueur ne correspond.", "No player with a name yet.": "Aucun joueur avec un nom pour l'instant."
 };
 
 // Sentences made of a number and a word, or of fixed words around a name. Each rule is tried on every text, in this order.
@@ -1343,15 +1351,16 @@ function perfPill(v) {
 
 /** What the player answered for the game the report is about: the colour says which answer, "no vote" when there is none. */
 function answerPill(r) {
-  if (!r.verdict) return el("span", { class: "pill v-none", text: "No vote" });
-  var text = ANSWERS[r.verdict] + (r.verdict === "works" && r.offline ? " (offline mode)" : "");
-  return el("span", { class: "pill v-" + r.verdict, text: text });
+  var key = r.verdict || "none";
+  var text = r.verdict ? ANSWERS[r.verdict] + (r.verdict === "works" && r.offline ? " (offline mode)" : "") : "No vote";
+  // A large check (works), wave (works offline only) or cross (does not work) in the colour of the answer, the words in its tooltip, so the column stays narrow.
+  return el("span", { class: "ico-tip", tabindex: "0", "data-tip": text, "aria-label": text }, [iconSvg(ANSWER_ICONS[key], 30, "ico-ans ico-ans-" + key)]);
 }
 
 /** The reports as a table. Each has what the player answered, whether it waits or was handled, a link that saves the zip and a button to mark it. A game name is shown when the reports are of several games. */
 function reportsTable(reports, withGame, refresh, hidePlayer) {
-  var head = (withGame ? ["Game"] : []).concat(hidePlayer ? [] : ["Player"], ["Device", "GamePort", "Day", "Answer", "State", "Size", ""]);
-  var table = el("table", {}, [el("thead", {}, [el("tr", {}, head.map(function (h) { return el("th", { text: h }); }))])]);
+  var head = ["Answer"].concat(withGame ? ["Game"] : [], hidePlayer ? [] : ["Player"], ["Device", "GamePort", "Day", "State", "Size", ""]);
+  var table = el("table", {}, [el("thead", {}, [el("tr", {}, head.map(function (h) { return el("th", h === "Answer" ? { text: h, class: "icon-cell" } : { text: h }); }))])]);
   var body = el("tbody");
   reports.forEach(function (r) {
     var game = allGames().filter(function (g) { return g.appid === r.appId; })[0];
@@ -1375,9 +1384,8 @@ function reportsTable(reports, withGame, refresh, hidePlayer) {
         .then(function () { toast(r.handled ? "Back to waiting" : "Marked handled"); loadWaiting(); refresh(); }).catch(function (e) { toast(e.message, true); });
     } });
     var download = el("a", { class: "btn fill", href: "/console/api/report?env=" + state.env + "&id=" + r.id, download: "gameport-report-" + r.appId + "-" + r.id + ".zip", text: "Download" });
-    var cells = (withGame ? [nameCell] : []).concat(hidePlayer ? [] : [el("td", {}, [playerLink(r.voter, r.label, true)])], [
+    var cells = [el("td", { class: "icon-cell" }, [answerPill(r)])].concat(withGame ? [nameCell] : [], hidePlayer ? [] : [el("td", {}, [playerLink(r.voter, r.label, true)])], [
       el("td", {}, [document.createTextNode(r.device), modelLine(r)]), el("td", { text: r.app }), el("td", { text: formatDay(r.updated) }),
-      el("td", {}, [answerPill(r)]),
       el("td", {}, [r.handled ? el("span", { class: "muted", text: "Handled " + r.handled }) : el("span", { class: "todo", text: "To handle" })]),
       el("td", { text: size(r.size) }),
       el("td", {}, [el("div", { class: "actions" }, [download, toggle])]),
@@ -1458,23 +1466,82 @@ function deviceLink(v, text, tip, plain) {
     onclick: function (event) { event.preventDefault(); showGroup("device", key); } }, [label]);
 }
 
+/**
+ * The popover of an icon: a small dark box above it (below when there is no room), in place of the browser's tooltip. One box for the whole page, filled and placed when the pointer
+ * or the focus comes to an element with a data-tip, one line per line of the text, each drawn in the language picked. Its place is set through the style object: the page's
+ * policy allows no style attribute, but the properties of an element may be set from the script.
+ */
+var tipBox = null;
+function tipShow(target) {
+  var text = target.getAttribute("data-tip");
+  if (!text) return;
+  if (!tipBox) { tipBox = el("div", { class: "tip", role: "tooltip" }); document.body.appendChild(tipBox); }
+  tipBox.textContent = text.split("\\n").map(function (line) { return LANG === "fr" ? trText(line) : line; }).join("\\n");
+  tipBox.style.left = "0px";
+  tipBox.style.top = "0px";
+  var anchor = target.getBoundingClientRect();
+  var box = tipBox.getBoundingClientRect();
+  var left = Math.min(Math.max(8, anchor.left + anchor.width / 2 - box.width / 2), window.innerWidth - box.width - 8);
+  var top = anchor.top - box.height - 8;
+  if (top < 8) top = anchor.bottom + 8;
+  tipBox.style.left = left + "px";
+  tipBox.style.top = top + "px";
+  tipBox.className = "tip on";
+}
+function tipHide() { if (tipBox) tipBox.className = "tip"; }
+function tipTarget(event) { return event.target && event.target.closest ? event.target.closest("[data-tip]") : null; }
+document.addEventListener("mouseover", function (event) { var t = tipTarget(event); if (t) tipShow(t); });
+document.addEventListener("mouseout", function (event) { if (tipTarget(event)) tipHide(); });
+document.addEventListener("focusin", function (event) { var t = tipTarget(event); if (t) tipShow(t); });
+document.addEventListener("focusout", function (event) { if (tipTarget(event)) tipHide(); });
+window.addEventListener("scroll", tipHide, true);
+
+/** An icon drawn from paths (24 by 24, a line in the current colour); the page's policy allows no style attribute, so the colour comes from a class. */
+function iconSvg(paths, size, cls) {
+  var svg = svgNode("svg", { viewBox: "0 0 24 24", width: String(size), height: String(size), "aria-hidden": "true", class: "ico " + cls });
+  paths.forEach(function (d) { svg.appendChild(svgNode("path", { d: d })); });
+  return svg;
+}
+var ANSWER_ICONS = { works: ["M4 12.5l5 5L20 6.5"], offline_only: ["M3 9c3-3 6 3 9 0s6 3 9 0", "M3 15c3-3 6 3 9 0s6 3 9 0"], fails: ["M6 6l12 12", "M18 6L6 18"], none: ["M6 12h12"] };
+var ICON_WARN = ["M12 3l10 18H2z", "M12 10v5", "M12 18h.01"];
+var ICON_REPORT = ["M6 3h9l4 4v14H6z", "M15 3v4h4", "M9 12h6", "M9 16h4"];
+
+/** What the player ticked as going wrong, as one icon: the problems are in its tooltip, so the column stays narrow. */
+function problemIcon(codes) {
+  var text = codes.map(function (c) { return ISSUE_LABELS[c] || c; }).join("\\n");
+  return el("span", { class: "ico-tip", tabindex: "0", "data-tip": text, "aria-label": text.replace(/\\n/g, ", ") }, [iconSvg(ICON_WARN, 22, "ico-warn")]);
+}
+
+/** What became of the report, as a large icon in the colour of its state (green when the relay has it), the state in its tooltip. */
+function reportIcon(state) {
+  var info = REPORT_STATES[state];
+  if (!info) return document.createTextNode("");
+  return el("span", { class: "ico-tip", tabindex: "0", "data-tip": info[0] + "\\n" + info[2], "aria-label": info[0] }, [iconSvg(ICON_REPORT, 30, "ico-report-" + state)]);
+}
+
 /** The answers as a table, for the page of a player (the version of each), of a version (the player and the device of each) and of a device (the player and the version of each): the rest is the same. */
 function answersTable(votes, kind) {
-  var head = ["Game", "Answer"].concat(kind === "player" ? [] : ["Player"], kind === "device" ? [] : ["Device"], kind === "version" ? [] : ["GamePort"], ["Day", "Problems", "Report"]);
-  var table = el("table", {}, [el("thead", {}, [el("tr", {}, head.map(function (h) { return el("th", { text: h }); }))])]);
+  var head = ["Answer", "Game"].concat(kind === "player" ? [] : ["Player"], kind === "device" ? [] : ["Device"], kind === "version" ? [] : ["GamePort"], ["Day", "Problems", "Report"]);
+  // On the page of a player the two last columns are icons, to keep the width: the header is the same icon, small, with its name in the tooltip.
+  var table = el("table", {}, [el("thead", {}, [el("tr", {}, head.map(function (h) {
+    if (kind === "player" && h === "Problems") return el("th", { class: "icon-cell", "data-tip": h, "aria-label": h }, [iconSvg(ICON_WARN, 16, "ico-warn")]);
+    if (kind === "player" && h === "Report") return el("th", { class: "icon-cell", "data-tip": h, "aria-label": h }, [iconSvg(ICON_REPORT, 16, "ico-report-none")]);
+    return el("th", h === "Answer" ? { text: h, class: "icon-cell" } : { text: h });
+  }))])]);
   var body = el("tbody");
   votes.forEach(function (v) {
     var codes = (v.issues || "").split(",").filter(Boolean);
     var shown = v.fixed ? { verdict: "works", offline: false } : v;
     body.appendChild(el("tr", {}, [
+      el("td", { class: "icon-cell" }, [answerPill(shown), v.fixed ? el("small", { class: "muted", text: " fixed " + formatDay(v.fixed) + ", was " + ANSWERS[v.verdict] }) : null]),
       el("td", {}, [gameLink(v.appId)]),
-      el("td", {}, [answerPill(shown), v.fixed ? el("small", { class: "muted", text: " fixed " + formatDay(v.fixed) + ", was " + ANSWERS[v.verdict] }) : null]),
       kind === "player" ? null : el("td", {}, [playerLink(v.voter, v.label, true)]),
       kind === "device" ? null : el("td", {}, [document.createTextNode(v.device), modelLine(v)]),
-      kind === "version" ? null : el("td", {}, [versionLink(v.app)]),
+      // On the page of a player, a game they answered more than once shows the transition (✗ 0.9.1 → ✓ 0.9.4-alpha.13) in place of the version of the last answer, which it ends with.
+      kind === "version" ? null : el("td", {}, [kind === "player" && v.trail ? trailLine(v, true) : versionLink(v.app)]),
       el("td", { text: formatDay(v.updated) }),
-      el("td", {}, [codes.length ? issuePills(codes) : document.createTextNode("")]),
-      el("td", {}, [reportPill(v.reportState)]),
+      kind === "player" ? el("td", { class: "icon-cell" }, [codes.length ? problemIcon(codes) : null]) : el("td", {}, [codes.length ? issuePills(codes) : document.createTextNode("")]),
+      kind === "player" ? el("td", { class: "icon-cell" }, [reportIcon(v.reportState)]) : el("td", {}, [reportPill(v.reportState)]),
     ]));
   });
   table.appendChild(body);
@@ -1594,12 +1661,12 @@ function changesGroup(panel, title, list) {
 
 /** The games of a page of a version or of a device, one line each: the answer most of their answers give, and how those answers split. [ids] are the apps, in the order to show. */
 function gamesTable(ids, perGame, classOfGame) {
-  var table = el("table", {}, [el("thead", {}, [el("tr", {}, ["Game", "Verdict", "Work", "Work offline only", "Do not work", "Answers"].map(function (h) { return el("th", { text: h }); }))])]);
+  var table = el("table", {}, [el("thead", {}, [el("tr", {}, ["Verdict", "Game", "Work", "Work offline only", "Do not work", "Answers"].map(function (h) { return el("th", h === "Verdict" ? { text: h, class: "icon-cell" } : { text: h }); }))])]);
   var body = el("tbody");
   ids.forEach(function (id) {
     var c = perGame[id];
     body.appendChild(el("tr", { class: "v-" + classOfGame[id] }, [
-      el("td", {}, [gameLink(Number(id))]), el("td", {}, [answerPill({ verdict: classOfGame[id], offline: false })]),
+      el("td", { class: "icon-cell" }, [answerPill({ verdict: classOfGame[id], offline: false })]), el("td", {}, [gameLink(Number(id))]),
       el("td", { class: c.works ? "up" : "muted", text: String(c.works) }), el("td", { class: c.offline_only ? "" : "muted", text: String(c.offline_only) }), el("td", { class: c.fails ? "down" : "muted", text: String(c.fails) }),
       el("td", { text: String(c.works + c.offline_only + c.fails) }),
     ]));
@@ -2588,11 +2655,14 @@ function row(v) {
   var details = [v.deviceName || title === v.device ? null : v.device, whenText(v) || null, v.game ? "game " + v.game : null, v.voter, v.offline ? "worked offline" : null, state2 || null].filter(Boolean);
   return el("div", { class: "vote v-" + answer, title: VERDICTS[answer] }, [
     el("div", { class: "vote-main" }, [
-      el("div", { class: "vote-title" }, [deviceLink(v, title, [v.model, v.codename].filter(Boolean).join(" / "), true), el("span", { class: "ver", title: "Version of GamePort that sent this vote: opens every answer of this version" }, [document.createTextNode("- "), versionLink(v.app)])]),
+      el("div", { class: "vote-title" }, [deviceLink(v, title, [v.model, v.codename].filter(Boolean).join(" / "), true), v.trail
+        // The answers one after the other next to the device (✗ 0.9.1 → ✓ 0.9.4-alpha.13), where the version of the vote alone is when it answered once.
+        ? el("span", { class: "ver", title: "Every answer of this player for the game, oldest first" }, [document.createTextNode("- "), transitionMarks(v.trail)])
+        : el("span", { class: "ver", title: "Version of GamePort that sent this vote: opens every answer of this version" }, [document.createTextNode("- "), versionLink(v.app)])]),
       codes.length ? issuePills(codes) : document.createTextNode(""),
       v.reportState ? el("div", { class: "report-state" }, [reportPill(v.reportState)]) : document.createTextNode(""),
       v.perfSeconds ? el("div", { class: "report-state" }, [perfPill(v)]) : document.createTextNode(""),
-      v.trail ? trailLine(v) : document.createTextNode(""),
+      trailLine(v),
       el("div", { class: "vote-meta" }, details.map(function (piece, i) {
         var part = piece === v.voter ? el("span", {}, [playerLink(v.voter, v.label), document.createTextNode(v.app === "admin" ? " (admin)" : "")]) : document.createTextNode(piece);
         return i ? el("span", {}, [document.createTextNode(" \u00b7 "), part]) : part;
@@ -2605,10 +2675,29 @@ function row(v) {
 
 /** The answers of a player for the game, oldest first, as marks and versions of GamePort (✗ 0.8.2 → ✓ 0.9.0 → ✓ 0.9.3); opened, each one with its day. */
 var MARKS = { works: "✓", offline_only: "≈", fails: "✗" };
-function trailLine(v) {
+/**
+ * The component of a transition: the marks of the answers in their colours (green for works, orange for offline only, red for does not work), each followed by the version of GamePort,
+ * joined by arrows (✗ 0.9.1 → ✓ 0.9.4-alpha.13). [steps] are objects with a verdict and an app, oldest first; one step is just the answer and its version. The colour comes from a class:
+ * the page's policy allows no style attribute. Used wherever an answer or a change of answer is shown.
+ */
+function transitionMarks(steps) {
+  var box = el("span", { class: "marks" });
+  steps.forEach(function (t, i) {
+    if (i) box.appendChild(document.createTextNode(" \u2192 "));
+    box.appendChild(el("span", { class: "mk mk-" + t.verdict, text: MARKS[t.verdict] || "?" }));
+    box.appendChild(document.createTextNode(" " + t.app));
+  });
+  return box;
+}
+
+/**
+ * The list of the answers of a player for a game, each one with its day and what was ticked, to open. With [withMarks] the closed line is the transition itself (in a table, where
+ * it has no place of its own); without, it only says "History", the transition being next to the name of the device. Nothing for an answer given once.
+ */
+function trailLine(v, withMarks) {
+  if (!v.trail) return document.createTextNode("");
   var box = el("details", { class: "trail" });
-  var words = v.trail.map(function (t) { return (MARKS[t.verdict] || "?") + " " + t.app; }).join(" → ");
-  box.appendChild(el("summary", { text: words, title: "Every answer of this player for the game" }));
+  box.appendChild(el("summary", { title: "Every answer of this player for the game" }, [withMarks ? transitionMarks(v.trail) : document.createTextNode("History")]));
   v.trail.forEach(function (t) {
     var ticked = t.issues ? " · " + t.issues.split(",").map(function (c) { return ISSUE_LABELS[c] || c; }).join(", ") : "";
     box.appendChild(el("div", { class: "trail-line t-" + t.verdict, text: whenText(t) + " · " + (MARKS[t.verdict] || "?") + " " + VERDICTS[t.verdict] + " · GamePort " + t.app + (t.game ? " · build " + t.game : "") + ticked }));

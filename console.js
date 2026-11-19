@@ -376,6 +376,15 @@ async function player(url, env) {
   if (!validVoter(voter)) return json(400, { error: "bad voter" });
   const votes = (await env.DB.prepare(`${SELECT(table)} WHERE voter = ? ORDER BY updated DESC, app_id`).bind(voter).all()).results;
   const reports = await reportRows(environment, " WHERE r.voter = ?", [voter], env);
+  // The answers of the player for each game, oldest first, for the games where they gave more than one: the page shows the transition (✗ 0.9.1 → ✓ 0.9.4-alpha.13). Nothing before the history exists.
+  const trails = new Map();
+  try {
+    const lines = (await env.DB.prepare(`SELECT app_id AS appId, verdict, app, game, device, updated, voted_at AS votedAt, issues FROM ${HISTORY[table]} WHERE voter = ? ORDER BY id`).bind(voter).all()).results;
+    for (const { appId, ...line } of lines) trails.set(appId, [...(trails.get(appId) ?? []), line]);
+    for (const [appId, trail] of trails) if (trail.length < 2) trails.delete(appId);
+  } catch {
+    trails.clear();
+  }
   const [named] = (await env.DB.prepare(`SELECT label FROM ${LABEL_TABLES[environment]} WHERE voter = ?`).bind(voter).all()).results;
   // With no name from the developer, the Discord name the player typed stands in for it; the developer's name wins.
   let shown = named?.label ?? null;
@@ -387,7 +396,7 @@ async function player(url, env) {
       // No table for it yet (migration 0022).
     }
   }
-  return json(200, { voter, label: shown, votes: votes.map((row) => ({ ...row, offline: row.offline === 1, deviceName: deviceLabel(row.model, row.codename) })), reports });
+  return json(200, { voter, label: shown, votes: votes.map((row) => ({ ...row, offline: row.offline === 1, deviceName: deviceLabel(row.model, row.codename), ...(trails.has(row.appId) ? { trail: trails.get(row.appId) } : {}) })), reports });
 }
 
 /** The answers that match [where] (about the alias v), newest first, each with the name of its player: the developer's, else the Discord name the player typed. */

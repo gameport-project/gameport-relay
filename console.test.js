@@ -688,6 +688,17 @@ describe("the players", () => {
     assert.equal((await ask("/console/api/players?env=other")).status, 400);
   });
 
+  it("gives, for each game where the player answered more than once, the answers one after the other (the transition)", async () => {
+    vote(5, "aaaaaaaaaaaa", { verdict: "fails", device: "pico", app: "0.9.1" });
+    vote(5, "aaaaaaaaaaaa", { verdict: "works", device: "pico", app: "0.9.4-alpha.13" });
+    vote(6, "aaaaaaaaaaaa", { verdict: "works", device: "pico" });
+    const answer = await (await ask("/console/api/player?env=prod&voter=aaaaaaaaaaaa")).json();
+    const five = answer.votes.find((v) => v.appId === 5);
+    assert.deepEqual(five.trail.map((t) => [t.verdict, t.app]), [["fails", "0.9.1"], ["works", "0.9.4-alpha.13"]]);
+    // A game answered once has no transition.
+    assert.equal(answer.votes.find((v) => v.appId === 6).trail, undefined);
+  });
+
   it("keeps the real set and the test set apart, and refuses a player that is not a hash or a set that is not one", async () => {
     vote(5, "aaaaaaaaaaaa");
     const test = await (await ask("/console/api/player?env=test&voter=aaaaaaaaaaaa")).json();
