@@ -1101,8 +1101,17 @@ describe("the list of incompatible games", () => {
     assert.deepEqual(await publicList(), {
       v: 1,
       reasons: { "anti-tamper": { kind: "blocks", title: reason.title, text: reason.text } },
-      games: [{ appId: 438100, name: "Some game", reason: "anti-tamper", devices: [] }],
+      games: [{ appId: 438100, name: "Some game", reason: "anti-tamper", devices: [], codes: [] }],
     });
+  });
+
+  it("gives, for a game limited to a named device, the model codes and codenames of that device, so the app keeps no list of names", async () => {
+    assert.equal((await setReason()).status, 200);
+    assert.equal((await setGame({ devices: ["Pico 4"] })).status, 200);
+    const [game] = (await publicList()).games;
+    assert.deepEqual(game.devices, ["Pico 4"]);
+    for (const code of ["A8110", "A8170", "PICOA8110"]) assert.ok(game.codes.includes(code), code);
+    assert.ok(!game.codes.includes("A92Y0"));
   });
 
   it("tells a reason that warns from one that blocks, and a reason blocks unless it says it warns", async () => {

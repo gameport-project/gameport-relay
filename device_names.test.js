@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { deviceLabel, unknownHeadsetName } from "./device_names.js";
+import { codesOf, deviceLabel, unknownHeadsetName } from "./device_names.js";
 
 test("the Pico 4 is known by each of its model codes", () => {
   for (const code of ["A8110", "A81E0", "A8150", "A8170"]) assert.equal(deviceLabel(code, null), "Pico 4");
@@ -20,4 +20,13 @@ test("nothing is made up for a device that is not a headset or has no code", () 
   assert.equal(unknownHeadsetName("phone", "SM-G991B"), null);
   assert.equal(unknownHeadsetName("pico", ""), null);
   assert.equal(unknownHeadsetName("pico", null), null);
+});
+
+test("the codes of a named device are the model codes and the codenames that carry its name", () => {
+  const codes = codesOf(["Pico 4"]);
+  for (const code of ["A8110", "A81E0", "A8150", "A8170", "PICOA8110"]) assert.ok(codes.includes(code), code);
+  assert.ok(!codes.includes("A92Y0"));
+  // "Meta" is not part of what a person says.
+  assert.ok(codesOf(["Quest 3"]).includes("eureka"));
+  assert.deepEqual(codesOf(["No such device"]), []);
 });

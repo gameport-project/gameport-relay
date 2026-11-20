@@ -58,6 +58,23 @@ export function deviceName(model, codename, kind) {
   return deviceLabel(model, codename) ?? unknownHeadsetName(kind, model);
 }
 
+const plainName = (name) => String(name).trim().toLowerCase().replace(/^meta /, "").replace(/^oculus /, "").trim();
+
+/**
+ * The model codes and the codenames of the devices that go by these names ("Quest 3", "Pico 4"): what the app compares with what its device calls itself, so that the app keeps no list of names
+ * of its own. The headsets are looked at first; Google Play's list only for a name that no headset has.
+ */
+export function codesOf(names) {
+  const codes = new Set();
+  for (const name of names) {
+    const wanted = plainName(name);
+    const before = codes.size;
+    for (const table of [HEADSET_MODELS, HEADSET_CODENAMES]) for (const [code, label] of Object.entries(table)) if (plainName(label) === wanted) codes.add(code);
+    if (codes.size === before) for (const table of [generated.models, generated.codenames]) for (const [code, label] of Object.entries(table)) if (plainName(label) === wanted) codes.add(code);
+  }
+  return [...codes];
+}
+
 /** True for a model code the relay can name: a headset it lists by hand, or a device of Google Play's list. */
 export function knownModel(model) {
   return typeof model === "string" && (model in HEADSET_MODELS || model in generated.models);

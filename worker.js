@@ -4,7 +4,7 @@
 // and per game for 30 days, and only the developer, with a secret token, can read them. See README.md.
 
 import { handleConsole } from "./console.js";
-import { deviceName as nameOf } from "./device_names.js";
+import { codesOf, deviceName as nameOf } from "./device_names.js";
 import { ISSUES, ISSUE_SET } from "./issues.js";
 import { notifyReport, notifyVote } from "./notify.js";
 import { compareVersions, fixedSince, parseVersion, turnsOf } from "./turns.js";
@@ -649,7 +649,7 @@ async function incompatibleList(env, table, reasonsTable, withDevices) {
     ? { kind: r.kind, title: { en: r.title_en, fr: r.title_fr }, text: { en: r.text_en, fr: r.text_fr } }
     : { title: { en: r.title_en, fr: r.title_fr }, text: { en: r.text_en, fr: r.text_fr } }]));
   const listed = shown.map((g) => withDevices
-    ? { appId: g.appId, name: g.name, reason: g.reason, devices: g.devices ? g.devices.split(",") : [] }
+    ? { appId: g.appId, name: g.name, reason: g.reason, devices: g.devices ? g.devices.split(",") : [], codes: g.devices ? codesOf(g.devices.split(",")) : [] }
     : { appId: g.appId, name: g.name, reason: g.reason });
   return reply(200, { v: 1, reasons: byId, games: listed }, { "cache-control": "public, max-age=300" });
 }
