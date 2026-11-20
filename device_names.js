@@ -9,8 +9,10 @@ const HEADSET_MODELS = {
   "Quest Pro": "Meta Quest Pro",
   A8110: "Pico 4",
   A81E0: "Pico 4",
+  A8150: "Pico 4",
   A8210: "Pico 4 Pro",
   A92Y0: "Pico 4 Ultra",
+  A921C: "Pico 4 Ultra",
   B3110: "Pico Space Pro",
 };
 /** The headsets the console lists by kind of device, by the model code the app sends and the name shown: the first model of each name. */
@@ -35,6 +37,16 @@ const HEADSET_CODENAMES = {
  */
 export function deviceLabel(model, codename) {
   return HEADSET_MODELS[model] ?? generated.models[model] ?? HEADSET_CODENAMES[codename] ?? generated.codenames[codename] ?? null;
+}
+
+const HEADSET_KINDS = { quest: "Quest", pico: "Pico" };
+
+/**
+ * What a headset is called when its model is not in the list: its kind with its code ("Pico A8150"), so that it is never shown as a bare code, and the same way on the site, in the app and in
+ * the console. Null for a model that is known (use [deviceLabel]), and for a device that is not a headset or carries no code.
+ */
+export function unknownHeadsetName(kind, model) {
+  return typeof model === "string" && model !== "" && HEADSET_KINDS[kind] ? `${HEADSET_KINDS[kind]} ${model}` : null;
 }
 
 /** True for a model code the relay can name: a headset it lists by hand, or a device of Google Play's list. */

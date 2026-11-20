@@ -10,7 +10,7 @@
 import { changesOf } from "./changes.js";
 import { adoptionOf, dailyOf, daysEndingOn, devicesOf, evolutionOf, recentChanges, topGamesOf, topPlayersOf, versionsOf } from "./stats.js";
 import { compareVersions } from "./turns.js";
-import { DEVICE_CHOICES, deviceLabel, knownModel, searchModels } from "./device_names.js";
+import { DEVICE_CHOICES, deviceLabel, knownModel, searchModels, unknownHeadsetName } from "./device_names.js";
 import { ISSUE_SET } from "./issues.js";
 import { consolePage } from "./console_page.js";
 import { notifyVote } from "./notify.js";
@@ -566,7 +566,7 @@ async function version(url, env) {
 }
 
 /** What a device is called on its page: its name when the list knows it, else its model, else the kind of device. The console groups the same way. */
-const groupName = (device, model, codename) => deviceLabel(model, codename) ?? (model || device);
+const groupName = (device, model, codename) => deviceLabel(model, codename) ?? unknownHeadsetName(device, model) ?? (model || device);
 
 /**
  * Every answer and every report that came from one device (a headset, say), or from a whole kind of device when the name is "kind:quest": the devices that carry the same name are one,

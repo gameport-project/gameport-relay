@@ -4,7 +4,7 @@
 // and per game for 30 days, and only the developer, with a secret token, can read them. See README.md.
 
 import { handleConsole } from "./console.js";
-import { deviceLabel } from "./device_names.js";
+import { deviceLabel, unknownHeadsetName } from "./device_names.js";
 import { ISSUES, ISSUE_SET } from "./issues.js";
 import { notifyReport, notifyVote } from "./notify.js";
 import { compareVersions, fixedSince, parseVersion, turnsOf } from "./turns.js";
@@ -480,7 +480,7 @@ async function summary(env, table) {
     const modelRows = (await env.DB.prepare(`SELECT app_id AS appId, device, model, SUM(verdict = 'works') AS works, SUM(verdict = 'offline_only') AS offlineOnly, SUM(verdict = 'fails') AS fails FROM (SELECT app_id, device, model, CASE WHEN fixed IS NULL THEN verdict ELSE 'works' END AS verdict FROM ${table} WHERE model IS NOT NULL AND model <> '') GROUP BY app_id, device, model ORDER BY app_id, device, model`).all()).results;
     for (const row of modelRows) {
       const device = byGame.get(row.appId)?.devices[row.device];
-      if (device) (device.models ??= {})[row.model] = { works: row.works, offlineOnly: row.offlineOnly, fails: row.fails, ...(deviceLabel(row.model, null) ? { name: deviceLabel(row.model, null) } : {}) };
+      if (device) (device.models ??= {})[row.model] = { works: row.works, offlineOnly: row.offlineOnly, fails: row.fails, ...((deviceLabel(row.model, null) ?? unknownHeadsetName(row.device, row.model)) ? { name: deviceLabel(row.model, null) ?? unknownHeadsetName(row.device, row.model) } : {}) };
     }
   } catch {
     // No model column yet.
@@ -600,7 +600,7 @@ async function gameReports(env, table, appId) {
     .sort((a, b) => Number(Boolean(parseVersion(b.version))) - Number(Boolean(parseVersion(a.version))) || (compareVersions(b.version, a.version) ?? 0) || b.n - a.n || a.device.localeCompare(b.device) || a.model.localeCompare(b.model))
     .slice(0, REPORT_LINES)
     .map((line) => {
-      const name = line.model ? deviceLabel(line.model, null) : null;
+      const name = line.model ? deviceLabel(line.model, null) ?? unknownHeadsetName(line.device, line.model) : null;
       const since = fixedSince(line, turns);
       return {
         device: line.device,
