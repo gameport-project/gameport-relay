@@ -29,4 +29,6 @@ test("the codes of a named device are the model codes and the codenames that car
   // "Meta" is not part of what a person says.
   assert.ok(codesOf(["Quest 3"]).includes("eureka"));
   assert.deepEqual(codesOf(["No such device"]), []);
+  // A kind of device is not a device: it gives no code.
+  assert.deepEqual(codesOf(["quest", "pico", "phone"]), []);
 });

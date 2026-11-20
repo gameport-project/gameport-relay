@@ -58,6 +58,8 @@ export function deviceName(model, codename, kind) {
   return deviceLabel(model, codename) ?? unknownHeadsetName(kind, model);
 }
 
+const DEVICE_KINDS = new Set(["quest", "pico", "phone", "tablet", "other"]);
+
 const plainName = (name) => String(name).trim().toLowerCase().replace(/^meta /, "").replace(/^oculus /, "").trim();
 
 /**
@@ -68,6 +70,8 @@ export function codesOf(names) {
   const codes = new Set();
   for (const name of names) {
     const wanted = plainName(name);
+    // A kind of device ("quest", "pico") is not the name of a device: the app compares its own kind as it is, and "quest" must not become the codes of the first Quest.
+    if (DEVICE_KINDS.has(wanted)) continue;
     const before = codes.size;
     for (const table of [HEADSET_MODELS, HEADSET_CODENAMES]) for (const [code, label] of Object.entries(table)) if (plainName(label) === wanted) codes.add(code);
     if (codes.size === before) for (const table of [generated.models, generated.codenames]) for (const [code, label] of Object.entries(table)) if (plainName(label) === wanted) codes.add(code);
