@@ -10,6 +10,7 @@ const HEADSET_MODELS = {
   A8110: "Pico 4",
   A81E0: "Pico 4",
   A8150: "Pico 4",
+  A8170: "Pico 4",
   A8210: "Pico 4 Pro",
   A92Y0: "Pico 4 Ultra",
   A921C: "Pico 4 Ultra",
@@ -47,6 +48,14 @@ const HEADSET_KINDS = { quest: "Quest", pico: "Pico" };
  */
 export function unknownHeadsetName(kind, model) {
   return typeof model === "string" && model !== "" && HEADSET_KINDS[kind] ? `${HEADSET_KINDS[kind]} ${model}` : null;
+}
+
+/**
+ * THE name of a device, from its kind, its model and its codename: the one every place that shows a device calls (the summary the site and the app read, the details of a game, the console,
+ * the messages), so that two places never give a device two names. Null when the kind is not a headset and nothing is known.
+ */
+export function deviceName(model, codename, kind) {
+  return deviceLabel(model, codename) ?? unknownHeadsetName(kind, model);
 }
 
 /** True for a model code the relay can name: a headset it lists by hand, or a device of Google Play's list. */

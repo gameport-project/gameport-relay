@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { deviceLabel } from "./device_names.js";
+import { deviceLabel, deviceName } from "./device_names.js";
 import worker, { validate, voterHash } from "./worker.js";
 
 const VOTER = "0123456789abcdef0123456789abcdef";
@@ -916,6 +916,21 @@ describe("the model and the codename of a device", () => {
   const stripped = (...columns) => columns.reduce((sql, column) => sql.replaceAll(new RegExp(`^\\s*${column} +TEXT.*\\n`, "gm"), ""), legacySchema);
   const summaryOf = async (env) => (await (await worker.fetch(get(), env)).json()).games;
   const reportsOf = async (env, path = "/reports/1125240") => (await (await worker.fetch(get(path), env)).json()).reports;
+
+  it("names a model that the list does not know by its codename in the summary and in the details, the way the console does", async () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    const env = { DB: d1(db), VOTER_SALT: "salt" };
+    await worker.fetch(post(goodMessage({ voter: VOTER, verdict: "works", device: "pico", model: "ZZ777", codename: "PICOA8110" })), env);
+    await worker.fetch(post(goodMessage({ voter: OTHER, verdict: "works", device: "pico", model: "ZZ888" })), env);
+    const [game] = await summaryOf(env);
+    // The codename is the Pico 4's; the other model has none, so it is named by its kind and its code, never by a bare code.
+    assert.equal(game.devices.pico.models.ZZ777.name, "Pico 4");
+    assert.equal(game.devices.pico.models.ZZ888.name, "Pico ZZ888");
+    const lines = await reportsOf(env, "/reports/" + game.appId);
+    assert.deepEqual(lines.filter((line) => line.model).map((line) => [line.model, line.name]).sort(), [["ZZ777", "Pico 4"], ["ZZ888", "Pico ZZ888"]]);
+    assert.equal(deviceName("ZZ777", "PICOA8110", "pico"), "Pico 4");
+  });
 
   it("stores them with the vote, replaces them when the player votes again, and the summary counts the models for each kind of device", async () => {
     const db = new DatabaseSync(":memory:");

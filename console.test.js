@@ -474,7 +474,7 @@ describe("the reports", () => {
   const report = (table, appId, voter, day, device = "quest") =>
     db.prepare(`INSERT INTO ${table} (app_id, voter, app, device, size, data, updated) VALUES (?, ?, '0.7.4', ?, ?, ?, ?)`).run(appId, voter, device, ZIP.length, ZIP.toString("base64"), day);
 
-  it("tells the device behind a report from the vote of the same player, with its name, or the raw code when the name is not known", async () => {
+  it("tells the device behind a report from the vote of the same player, with its name, or its kind and its code when the name is not known", async () => {
     vote(5, "aaaaaaaaaaaa");
     vote(5, "bbbbbbbbbbbb");
     db.prepare("UPDATE vote_history SET model = 'Quest 3', codename = 'eureka' WHERE voter = 'aaaaaaaaaaaa'").run();
@@ -485,7 +485,7 @@ describe("the reports", () => {
     const { reports } = await (await ask("/console/api/reports?env=prod&appId=5")).json();
     const byDay = Object.fromEntries(reports.map((r) => [r.updated, [r.model, r.deviceName]]));
     assert.deepEqual(byDay["2026-10-08"], ["Quest 3", "Meta Quest 3"]);
-    assert.deepEqual(byDay["2026-10-09"], ["ZZ-NOT-A-DEVICE", null]);
+    assert.deepEqual(byDay["2026-10-09"], ["ZZ-NOT-A-DEVICE", "Quest ZZ-NOT-A-DEVICE"]);
     assert.deepEqual(byDay["2026-10-10"], [null, null]);
   });
 

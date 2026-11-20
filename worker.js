@@ -4,7 +4,7 @@
 // and per game for 30 days, and only the developer, with a secret token, can read them. See README.md.
 
 import { handleConsole } from "./console.js";
-import { deviceLabel, unknownHeadsetName } from "./device_names.js";
+import { deviceName as nameOf } from "./device_names.js";
 import { ISSUES, ISSUE_SET } from "./issues.js";
 import { notifyReport, notifyVote } from "./notify.js";
 import { compareVersions, fixedSince, parseVersion, turnsOf } from "./turns.js";
@@ -274,6 +274,16 @@ async function saveContact(env, table, voter, discord) {
 /** The relay's own clock, UTC, rounded down to the hour: the app never sends a time, and none of a player's is used. */
 export const thisHour = (now = new Date()) => `${now.toISOString().slice(0, 13)}:00:00Z`;
 // A vote marked as fixed counts as "works": the problem it reported was solved, whatever it said.
+/** The codename the votes gave for each model (Build.MODEL to Build.DEVICE): a model the list does not know is named by its codename, the way the console does. Empty before the migration of the codename. */
+async function modelCodenames(env, table) {
+  try {
+    const rows = (await env.DB.prepare(`SELECT model, MAX(codename) AS codename FROM ${table} WHERE model IS NOT NULL AND model <> '' AND codename IS NOT NULL AND codename <> '' GROUP BY model`).all()).results;
+    return new Map(rows.map((row) => [row.model, row.codename]));
+  } catch {
+    return new Map();
+  }
+}
+
 /** How many lines of reports (model, answer, version of GamePort) the summary gives for one game. */
 const REPORT_LINES = 24;
 
@@ -478,9 +488,10 @@ async function summary(env, table) {
   // The models the votes came from, for the game and each kind of device: how many said it works, partly works or fails (a fixed vote counts as "works"). Nothing to count before the migration of the models.
   try {
     const modelRows = (await env.DB.prepare(`SELECT app_id AS appId, device, model, SUM(verdict = 'works') AS works, SUM(verdict = 'offline_only') AS offlineOnly, SUM(verdict = 'fails') AS fails FROM (SELECT app_id, device, model, CASE WHEN fixed IS NULL THEN verdict ELSE 'works' END AS verdict FROM ${table} WHERE model IS NOT NULL AND model <> '') GROUP BY app_id, device, model ORDER BY app_id, device, model`).all()).results;
+    const codenames = await modelCodenames(env, table);
     for (const row of modelRows) {
       const device = byGame.get(row.appId)?.devices[row.device];
-      if (device) (device.models ??= {})[row.model] = { works: row.works, offlineOnly: row.offlineOnly, fails: row.fails, ...((deviceLabel(row.model, null) ?? unknownHeadsetName(row.device, row.model)) ? { name: deviceLabel(row.model, null) ?? unknownHeadsetName(row.device, row.model) } : {}) };
+      if (device) (device.models ??= {})[row.model] = { works: row.works, offlineOnly: row.offlineOnly, fails: row.fails, ...(nameOf(row.model, codenames.get(row.model), row.device) ? { name: nameOf(row.model, codenames.get(row.model), row.device) } : {}) };
     }
   } catch {
     // No model column yet.
@@ -552,6 +563,7 @@ export async function readTurns(env, table, appId) {
  * and the lines are only by kind of device. Asked for one game only when its details are opened, so the summary every app reads stays small. Nothing about any player.
  */
 async function gameReports(env, table, appId) {
+  const codenames = await modelCodenames(env, table);
   let rows;
   try {
     rows = (await env.DB.prepare(`SELECT device, COALESCE(model, '') AS model, app AS version, CASE WHEN fixed IS NULL THEN verdict ELSE 'works' END AS verdict, CASE WHEN fixed IS NULL THEN issues END AS issues FROM ${table} WHERE app_id = ?`).bind(appId).all()).results;
@@ -600,7 +612,7 @@ async function gameReports(env, table, appId) {
     .sort((a, b) => Number(Boolean(parseVersion(b.version))) - Number(Boolean(parseVersion(a.version))) || (compareVersions(b.version, a.version) ?? 0) || b.n - a.n || a.device.localeCompare(b.device) || a.model.localeCompare(b.model))
     .slice(0, REPORT_LINES)
     .map((line) => {
-      const name = line.model ? deviceLabel(line.model, null) ?? unknownHeadsetName(line.device, line.model) : null;
+      const name = line.model ? nameOf(line.model, codenames.get(line.model), line.device) : null;
       const since = fixedSince(line, turns);
       return {
         device: line.device,

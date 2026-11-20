@@ -10,7 +10,7 @@
 import { changesOf } from "./changes.js";
 import { adoptionOf, dailyOf, daysEndingOn, devicesOf, evolutionOf, recentChanges, topGamesOf, topPlayersOf, versionsOf } from "./stats.js";
 import { compareVersions } from "./turns.js";
-import { DEVICE_CHOICES, deviceLabel, knownModel, searchModels, unknownHeadsetName } from "./device_names.js";
+import { DEVICE_CHOICES, deviceName as nameOf, knownModel, searchModels } from "./device_names.js";
 import { ISSUE_SET } from "./issues.js";
 import { consolePage } from "./console_page.js";
 import { notifyVote } from "./notify.js";
@@ -187,7 +187,7 @@ async function list(url, env) {
   } catch {
     trails = new Map();
   }
-  return json(200, { synth, deviceChoices: DEVICE_CHOICES, votes: rows.map((row) => ({ ...row, offline: row.offline === 1, deviceName: deviceLabel(row.model, row.codename), ...(trails.has(row.voter) ? { trail: trails.get(row.voter).map(({ voter, ...line }) => line) } : {}) })) });
+  return json(200, { synth, deviceChoices: DEVICE_CHOICES, votes: rows.map((row) => ({ ...row, offline: row.offline === 1, deviceName: nameOf(row.model, row.codename, row.device), ...(trails.has(row.voter) ? { trail: trails.get(row.voter).map(({ voter, ...line }) => line) } : {}) })) });
 }
 
 async function add(message, env, table, environment, ctx, origin) {
@@ -364,7 +364,7 @@ async function reportRows(environment, where, binds, env) {
   } catch {
     rows = await readRows(false);
   }
-  return rows.map((row) => ({ ...row, label: row.label ?? null, deviceName: deviceLabel(row.model, row.codename), verdict: row.verdict ?? null, offline: row.verdict === null || row.verdict === undefined ? null : row.offline === 1 }));
+  return rows.map((row) => ({ ...row, label: row.label ?? null, deviceName: nameOf(row.model, row.codename, row.device), verdict: row.verdict ?? null, offline: row.verdict === null || row.verdict === undefined ? null : row.offline === 1 }));
 }
 
 /** Everything one player sent: their votes on every game, their reports, and the name given to them. */
@@ -396,7 +396,7 @@ async function player(url, env) {
       // No table for it yet (migration 0022).
     }
   }
-  return json(200, { voter, label: shown, votes: votes.map((row) => ({ ...row, offline: row.offline === 1, deviceName: deviceLabel(row.model, row.codename), ...(trails.has(row.appId) ? { trail: trails.get(row.appId) } : {}) })), reports });
+  return json(200, { voter, label: shown, votes: votes.map((row) => ({ ...row, offline: row.offline === 1, deviceName: nameOf(row.model, row.codename, row.device), ...(trails.has(row.appId) ? { trail: trails.get(row.appId) } : {}) })), reports });
 }
 
 /** The answers that match [where] (about the alias v), newest first, each with the name of its player: the developer's, else the Discord name the player typed. */
@@ -415,7 +415,7 @@ async function votesWhere(environment, where, binds, env) {
   } catch {
     rows = (await read(false)).results;
   }
-  return rows.map((row) => ({ ...row, label: row.label ?? null, offline: row.offline === 1, deviceName: deviceLabel(row.model, row.codename) }));
+  return rows.map((row) => ({ ...row, label: row.label ?? null, offline: row.offline === 1, deviceName: nameOf(row.model, row.codename, row.device) }));
 }
 
 /** The numbers of the console's home for one set: the days, the games that work, the best players and games, the devices, the versions in use and the changes of the week. */
@@ -566,7 +566,7 @@ async function version(url, env) {
 }
 
 /** What a device is called on its page: its name when the list knows it, else its model, else the kind of device. The console groups the same way. */
-const groupName = (device, model, codename) => deviceLabel(model, codename) ?? unknownHeadsetName(device, model) ?? (model || device);
+const groupName = (device, model, codename) => nameOf(model, codename, device) ?? (model || device);
 
 /**
  * Every answer and every report that came from one device (a headset, say), or from a whole kind of device when the name is "kind:quest": the devices that carry the same name are one,

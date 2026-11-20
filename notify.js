@@ -2,11 +2,11 @@
 // test set (secret DISCORD_TEST_WEBHOOK), so the tries of a test build never mix with the real ones. It is for one person: the address of a webhook is a secret of the
 // relay, never written in a file or a log. The player is only the short salted hash of the console (never the id the app keeps) and the name the developer gave them there,
 // when there is one, so the developer can open them in the console; a failure here changes nothing: the vote or the report is already saved, and the player gets the same answer.
-import { deviceLabel, unknownHeadsetName } from "./device_names.js";
+import { deviceName } from "./device_names.js";
 
 
 /** What a device is called in a message: its exact name when the model is known (Quest 3, Pico 4), the kind of device otherwise. */
-const deviceText = (item) => deviceLabel(item.model, item.codename) ?? unknownHeadsetName(item.device, item.model) ?? DEVICES[item.device] ?? item.device;
+const deviceText = (item) => deviceName(item.model, item.codename, item.device) ?? DEVICES[item.device] ?? item.device;
 
 const WEBHOOK = /^https:\/\/(discord|discordapp)\.com\/api\/webhooks\/\d+\/[\w-]+$/;
 const NAME_TTL_MS = 3_600_000;
