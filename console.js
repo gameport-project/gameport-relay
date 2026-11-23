@@ -27,6 +27,17 @@ const REPORT_TABLES = { prod: "reports", test: "reports_test" };
 // The votes each set of reports goes with: a report and the vote of the same player for the same game share the app and the hashed player.
 const VOTE_OF_REPORTS = { reports: "votes", reports_test: "votes_test" };
 const MAX_REPORTS_LISTED = 200;
+// The libraries a player chose to send with a report (see migration 0028), for the same two sets, and the tables of parts each kind of zip is cut into. The names come from here and nowhere else.
+const LIBRARY_TABLES = { prod: "libraries", test: "libraries_test" };
+const PART_TABLES = { reports: "report_parts", reports_test: "report_parts_test", libraries: "library_parts", libraries_test: "library_parts_test" };
+const KINDS = ["report", "libraries"];
+/** The table of one kind of zip ("report" or "libraries") in one set, or null when the kind or the set is not one. */
+const zipTable = (environment, kind = "report") => (kind === "libraries" ? LIBRARY_TABLES : kind === "report" ? REPORT_TABLES : {})[environment] ?? null;
+/** How many reports a page of the list holds, and the most it can be asked for. */
+const REPORTS_PAGE = 50;
+const MAX_REPORTS_PAGE = 200;
+/** The ages (in days) the console can clear reports of. */
+const PURGE_DAYS = new Set([7, 14, 30]);
 // The names the developer gives to players (a Discord name, say), for the same two sets: the player stays a short hash everywhere else.
 const LABEL_TABLES = { prod: "player_labels", test: "player_labels_test" };
 const MAX_LABEL = 40;
@@ -330,41 +341,69 @@ async function appPrice(url) {
 }
 
 /**
- * The reports of a game, or the latest ones of every game when no game is given, the ones not handled first. Not the zips: those are downloaded one by one.
- * Each report carries the answer of the same player for the same game (it may have changed since the report was sent), and the answer is null when the
- * player has no vote. `unhandled` counts every report still waiting in the set, not only the ones listed.
+ * The reports of a game, or the latest ones of every game when no game is given, the ones not handled first, a page at a time (`limit` and `offset`): the libraries a player sent come in the same
+ * list, each line saying its `kind` ("report" or "libraries"). Not the zips: those are downloaded one by one. Each report carries the answer of the same player for the same game (it may have
+ * changed since the report was sent), and the answer is null when the player has no vote. `unhandled` counts every report still waiting in the set, `waiting` how many wait for each game,
+ * `total` how many lines match, not only the ones listed.
  */
 async function listReports(url, env) {
-  const table = REPORT_TABLES[url.searchParams.get("env")];
+  const environment = url.searchParams.get("env");
+  const table = REPORT_TABLES[environment];
   if (!table) return json(400, { error: "bad env" });
   const given = url.searchParams.get("appId");
   const appId = given === null ? null : Number(given);
   if (appId !== null && !validId(appId)) return json(400, { error: "bad appId" });
-  const rows = await reportRows(url.searchParams.get("env"), appId === null ? "" : " WHERE r.app_id = ?", appId === null ? [] : [appId], env);
-  const [{ n }] = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE handled IS NULL`).all()).results;
-  return json(200, { unhandled: n, reports: rows });
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || REPORTS_PAGE, 1), MAX_REPORTS_PAGE);
+  const offset = Math.max(Math.floor(Number(url.searchParams.get("offset"))) || 0, 0);
+  const where = appId === null ? "" : " WHERE r.app_id = ?";
+  const binds = appId === null ? [] : [appId];
+  const { rows, withLibraries } = await reportPage(environment, where, binds, env, limit, offset);
+  const tables = withLibraries ? [table, LIBRARY_TABLES[environment]] : [table];
+  const count = async (sql) => (await Promise.all(tables.map((t) => env.DB.prepare(sql.replaceAll("$T", t)).all()))).flatMap((r) => r.results);
+  const unhandled = (await count("SELECT COUNT(*) AS n FROM $T WHERE handled IS NULL")).reduce((sum, row) => sum + row.n, 0);
+  const waiting = {};
+  for (const row of await count("SELECT app_id AS appId, COUNT(*) AS n FROM $T WHERE handled IS NULL GROUP BY app_id")) waiting[row.appId] = (waiting[row.appId] ?? 0) + row.n;
+  const total = (await Promise.all(tables.map((t) => env.DB.prepare(`SELECT COUNT(*) AS n FROM ${t} r${where}`).bind(...binds).all()))).reduce((sum, r) => sum + r.results[0].n, 0);
+  return json(200, { unhandled, waiting, total, offset, hasMore: offset + rows.length < total, reports: rows });
 }
+
+/** What every line of the list is read from: the reports, and the libraries when the database has them, each marked with its kind. */
+const zipLines = (environment, withLibraries) =>
+  `(SELECT id, app_id, voter, app, device, size, updated, handled, 'report' AS kind FROM ${REPORT_TABLES[environment]}` +
+  (withLibraries ? ` UNION ALL SELECT id, app_id, voter, app, device, size, updated, handled, 'libraries' AS kind FROM ${LIBRARY_TABLES[environment]}` : "") + ")";
 
 /** The reports that match [where], newest first, the ones not handled before the others: each with the answer and the device of the same player for the same game, the player and the name given to them. */
 async function reportRows(environment, where, binds, env) {
-  const table = REPORT_TABLES[environment];
-  const votes = VOTE_OF_REPORTS[table];
+  return (await reportPage(environment, where, binds, env, MAX_REPORTS_LISTED, 0)).rows;
+}
+
+/**
+ * One page of those lines, and whether the libraries were part of it: a database that has not had migration 0028 (the libraries) or 0022 (the Discord names) answers with what it has.
+ */
+async function reportPage(environment, where, binds, env, limit, offset) {
+  const votes = VOTE_OF_REPORTS[REPORT_TABLES[environment]];
   const labels = LABEL_TABLES[environment];
   const contacts = CONTACT_TABLES[environment];
-  // The name is the one the developer gave, else the Discord name the player typed; a database that has not had migration 0022 has no such table.
-  const statementFor = (withContact) => env.DB.prepare(
-    `SELECT r.id, r.app_id AS appId, r.voter, ${withContact ? "COALESCE(l.label, c.discord)" : "l.label"} AS label, r.app, r.device, v.model, v.codename, r.size, r.updated, r.handled, v.verdict, v.offline FROM ${table} r ` +
+  // The name is the one the developer gave, else the Discord name the player typed.
+  const statementFor = (withContact, withLibraries) => env.DB.prepare(
+    `SELECT r.id, r.kind, r.app_id AS appId, r.voter, ${withContact ? "COALESCE(l.label, c.discord)" : "l.label"} AS label, r.app, r.device, v.model, v.codename, r.size, r.updated, r.handled, v.verdict, v.offline FROM ${zipLines(environment, withLibraries)} r ` +
     `LEFT JOIN ${votes} v ON v.app_id = r.app_id AND v.voter = r.voter LEFT JOIN ${labels} l ON l.voter = r.voter ${withContact ? `LEFT JOIN ${contacts} c ON c.voter = r.voter` : ""}${where} ` +
-    `ORDER BY r.handled IS NOT NULL, r.updated DESC, r.id DESC LIMIT ${MAX_REPORTS_LISTED}`,
+    `ORDER BY r.handled IS NOT NULL, r.updated DESC, r.id DESC LIMIT ${limit} OFFSET ${offset}`,
   );
-  const readRows = async (withContact) => (await (binds.length ? statementFor(withContact).bind(...binds) : statementFor(withContact)).all()).results;
+  const readRows = async (withContact, withLibraries) => (await (binds.length ? statementFor(withContact, withLibraries).bind(...binds) : statementFor(withContact, withLibraries)).all()).results;
   let rows;
+  let withLibraries = true;
   try {
-    rows = await readRows(true);
+    rows = await readRows(true, true);
   } catch {
-    rows = await readRows(false);
+    withLibraries = false;
+    try {
+      rows = await readRows(true, false);
+    } catch {
+      rows = await readRows(false, false);
+    }
   }
-  return rows.map((row) => ({ ...row, label: row.label ?? null, deviceName: nameOf(row.model, row.codename, row.device), verdict: row.verdict ?? null, offline: row.verdict === null || row.verdict === undefined ? null : row.offline === 1 }));
+  return { withLibraries, rows: rows.map((row) => ({ ...row, label: row.label ?? null, deviceName: nameOf(row.model, row.codename, row.device), verdict: row.verdict ?? null, offline: row.verdict === null || row.verdict === undefined ? null : row.offline === 1 })) };
 }
 
 /** Everything one player sent: their votes on every game, their reports, and the name given to them. */
@@ -618,28 +657,87 @@ async function setLabel(message, env, _table, environment) {
   return json(200, { ok: true, label });
 }
 
-/** Marks a report as handled (the day), or as waiting again. */
+/** Marks a report (or the libraries a player sent) as handled (the day), or as waiting again. */
 async function handleReport(message, env, _table, environment) {
-  const table = REPORT_TABLES[environment];
+  const kind = message.kind ?? "report";
+  const table = KINDS.includes(kind) ? zipTable(environment, kind) : null;
+  if (!table) return json(400, { error: "bad kind" });
   if (!Number.isInteger(message.id) || message.id < 1) return json(400, { error: "bad id" });
   if (typeof message.handled !== "boolean") return json(400, { error: "bad handled" });
   const [row] = (await env.DB.prepare(`SELECT id, app_id AS appId, handled FROM ${table} WHERE id = ?`).bind(message.id).all()).results;
   if (!row) return json(404, { error: "no such report" });
   const day = message.handled ? (row.handled ?? new Date().toISOString().slice(0, 10)) : null;
   await env.DB.prepare(`UPDATE ${table} SET handled = ? WHERE id = ?`).bind(day, message.id).run();
-  log("report", { env: environment, id: message.id, appId: row.appId, handled: day });
+  log("report", { env: environment, kind, id: message.id, appId: row.appId, handled: day });
   return json(200, { ok: true });
 }
 
-/** One report as the zip file it is, to be saved. */
+/** Removes one report, or the libraries of one player, with the parts of its zip. There is no way back. */
+async function removeReport(message, env, _table, environment) {
+  const kind = message.kind ?? "report";
+  const table = KINDS.includes(kind) ? zipTable(environment, kind) : null;
+  if (!table) return json(400, { error: "bad kind" });
+  if (!Number.isInteger(message.id) || message.id < 1) return json(400, { error: "bad id" });
+  const [row] = (await env.DB.prepare(`SELECT id, app_id AS appId FROM ${table} WHERE id = ?`).bind(message.id).all()).results;
+  if (!row) return json(404, { error: "no such report" });
+  await forget(env, table, "id = ?", [message.id]);
+  log("report-remove", { env: environment, kind, id: message.id, appId: row.appId });
+  return json(200, { ok: true });
+}
+
+/** Deletes the lines of [table] that match [where], and the parts of their zips first (the parts are found through the lines). A table of parts that does not exist yet has nothing to forget. */
+async function forget(env, table, where, binds) {
+  try {
+    await env.DB.prepare(`DELETE FROM ${PART_TABLES[table]} WHERE report_id IN (SELECT id FROM ${table} WHERE ${where})`).bind(...binds).run();
+  } catch {
+    // No table of parts yet.
+  }
+  await env.DB.prepare(`DELETE FROM ${table} WHERE ${where}`).bind(...binds).run();
+}
+
+/** The day [days] days before today, as the reports are dated (YYYY-MM-DD): a report of that day or later is kept. */
+const dayBefore = (days, now = new Date()) => new Date(now.getTime() - days * 86_400_000).toISOString().slice(0, 10);
+
+/**
+ * Removes every report and every library sent more than [days] days ago (7, 14 or 30), in one set. Without `confirm` it only counts them, so the console can say how many before it asks.
+ * The answers are not touched.
+ */
+async function purgeReports(message, env, _table, environment) {
+  if (!PURGE_DAYS.has(message.days)) return json(400, { error: "bad days" });
+  const cutoff = dayBefore(message.days);
+  const tables = [REPORT_TABLES[environment], LIBRARY_TABLES[environment]];
+  const counts = {};
+  for (const table of tables) {
+    try {
+      counts[table] = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE updated < ?`).bind(cutoff).all()).results[0].n;
+    } catch {
+      // The libraries are not there yet (migration 0028): there are none to remove.
+      counts[table] = 0;
+    }
+  }
+  const count = Object.values(counts).reduce((sum, n) => sum + n, 0);
+  if (message.confirm !== true) return json(200, { ok: true, count, removed: false });
+  for (const table of tables) if (counts[table] > 0) await forget(env, table, "updated < ?", [cutoff]);
+  log("report-purge", { env: environment, days: message.days, count });
+  return json(200, { ok: true, count, removed: true });
+}
+
+/** One report, or the libraries of a player, as the zip file it is, to be saved. */
 async function downloadReport(url, env) {
-  const table = REPORT_TABLES[url.searchParams.get("env")];
+  const kind = url.searchParams.get("kind") ?? "report";
+  const table = KINDS.includes(kind) ? zipTable(url.searchParams.get("env"), kind) : null;
   const id = Number(url.searchParams.get("id"));
   if (!table) return json(400, { error: "bad env" });
   if (!Number.isInteger(id) || id < 1) return json(400, { error: "bad id" });
   const found = await readReport(env, table, id);
   if (!found) return json(404, { error: "no such report" });
-  const name = `gameport-report-${found.appId}-${id}.zip`;
+  // Taking the zip, from the console or from the link of the Discord message, is what handles a report: the day it was first taken stays.
+  try {
+    await env.DB.prepare(`UPDATE ${table} SET handled = ? WHERE id = ? AND handled IS NULL`).bind(new Date().toISOString().slice(0, 10), id).run();
+  } catch (error) {
+    log("report-handled-failed", { env: url.searchParams.get("env"), kind, id, error: String(error) });
+  }
+  const name = `gameport-${kind === "libraries" ? "libraries" : "report"}-${found.appId}-${id}.zip`;
   return new Response(found.bytes, {
     headers: { "content-type": "application/zip", "content-disposition": `attachment; filename="${name}"`, "cache-control": "no-store", "x-content-type-options": "nosniff" },
   });
@@ -819,7 +917,7 @@ async function setDefault(message, env, _table, environment) {
   return json(200, { ok: true });
 }
 
-const WRITES = { "/console/api/game-default-set": setDefault, "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove, "/console/api/report-handled": handleReport, "/console/api/incompatible-set": setIncompatible, "/console/api/reason-set": setReason, "/console/api/reason-remove": removeReason, "/console/api/incompatible-remove": removeIncompatible, "/console/api/seen": seen, "/console/api/player-label": setLabel };
+const WRITES = { "/console/api/game-default-set": setDefault, "/console/api/add": add, "/console/api/change": change, "/console/api/remove": remove, "/console/api/report-handled": handleReport, "/console/api/report-remove": removeReport, "/console/api/reports-purge": purgeReports, "/console/api/incompatible-set": setIncompatible, "/console/api/reason-set": setReason, "/console/api/reason-remove": removeReason, "/console/api/incompatible-remove": removeIncompatible, "/console/api/seen": seen, "/console/api/player-label": setLabel };
 
 /** The page answers at /console and at an address that names the set and what is open: /console/prod, /console/test/1125240, /console/prod/version/0.9.4, /console/prod/reports, /console/prod/news, /console/test/reasons. */
 const PAGE_PATH = /^\/console\/?$|^\/console\/(test|prod)(\/(\d{1,10}|reports|news|reasons|incompatible|defaults|players|player\/[0-9a-f]{12}|version\/\d{1,3}\.\d{1,3}\.\d{1,3}(?:-alpha\.\d{1,5})?|device\/[\w%.\-:]{1,80}))?\/?$/;

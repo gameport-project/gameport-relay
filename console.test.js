@@ -551,6 +551,20 @@ describe("the reports", () => {
     assert.deepEqual(Buffer.from(await response.arrayBuffer()), ZIP);
   });
 
+  it("handles a report when its zip is taken, once, and keeps the first day", async () => {
+    report("reports", 5, "aaaaaaaaaaaa", "2026-10-08");
+    const row = () => db.prepare("SELECT id, handled FROM reports").get();
+    const { id } = row();
+    assert.equal(row().handled, null);
+    assert.equal((await ask(`/console/api/report?env=prod&id=${id}`)).status, 200);
+    assert.match(row().handled, /^\d{4}-\d{2}-\d{2}$/);
+    db.prepare("UPDATE reports SET handled = '2026-10-09' WHERE id = ?").run(id);
+    assert.equal((await ask(`/console/api/report?env=prod&id=${id}`)).status, 200);
+    assert.equal(row().handled, "2026-10-09");
+    // A report that is not there is not handled by asking for it.
+    assert.equal((await ask("/console/api/report?env=prod&id=999")).status, 404);
+  });
+
   it("reads the set that was asked, and refuses what is not exactly known", async () => {
     report("reports", 5, "aaaaaaaaaaaa", "2026-10-08");
     assert.equal((await ask("/console/api/report?env=test&id=1")).status, 404);
@@ -567,6 +581,118 @@ describe("the reports", () => {
     report("reports", 5, "aaaaaaaaaaaa", "2026-10-08");
     assert.equal((await ask("/console/api/reports?env=prod", { jwt: null })).status, 404);
     assert.equal((await ask("/console/api/report?env=prod&id=1", { jwt: null })).status, 404);
+  });
+});
+
+describe("the reports and the libraries in the console", () => {
+  const ZIP = Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 250, 255]);
+  const daysAgo = (days) => new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+  const zip = (table, appId, voter, day) =>
+    db.prepare(`INSERT INTO ${table} (app_id, voter, app, device, size, data, updated) VALUES (?, ?, '0.9.5', 'pico', ?, ?, ?)`).run(appId, voter, ZIP.length, ZIP.toString("base64"), day);
+  const list = async (query = "env=prod") => (await ask(`/console/api/reports?${query}`)).json();
+  const post = (path, body) => ask(`/console/api/${path}`, { method: "POST", body });
+
+  it("lists the libraries with the reports, each line saying its kind, with the Discord name of the player", async () => {
+    zip("reports", 5, "aaaaaaaaaaaa", daysAgo(3));
+    zip("libraries", 5, "aaaaaaaaaaaa", daysAgo(1));
+    db.prepare("INSERT INTO player_contacts (voter, discord, updated) VALUES ('aaaaaaaaaaaa', 'some.player', '2026-11-01')").run();
+    const { reports, unhandled, waiting, total } = await list();
+    assert.deepEqual(reports.map((r) => [r.kind, r.label]), [["libraries", "some.player"], ["report", "some.player"]]);
+    assert.deepEqual([unhandled, waiting, total], [2, { 5: 2 }, 2]);
+    assert.equal((await list("env=test")).reports.length, 0);
+  });
+
+  it("gives the list a page at a time, and says whether more follow", async () => {
+    for (let i = 0; i < 7; i++) zip("reports", 100 + i, `${String(i).repeat(12)}`, daysAgo(i));
+    const first = await list("env=prod&limit=3");
+    assert.deepEqual([first.reports.map((r) => r.appId), first.total, first.hasMore], [[100, 101, 102], 7, true]);
+    const last = await list("env=prod&limit=3&offset=6");
+    assert.deepEqual([last.reports.map((r) => r.appId), last.hasMore], [[106], false]);
+    // Every report, however many: the page is 50 by default and 200 at most.
+    assert.equal((await list("env=prod&limit=100000")).reports.length, 7);
+  });
+
+  it("gives the libraries back as a zip file named for them, and marks them as handled on their own table", async () => {
+    zip("reports", 5, "aaaaaaaaaaaa", daysAgo(1));
+    zip("libraries", 5, "bbbbbbbbbbbb", daysAgo(1));
+    const lib = (await list()).reports.find((r) => r.kind === "libraries");
+    const answer = await ask(`/console/api/report?env=prod&kind=libraries&id=${lib.id}`);
+    assert.equal(answer.headers.get("content-disposition"), `attachment; filename="gameport-libraries-5-${lib.id}.zip"`);
+    assert.deepEqual(Buffer.from(await answer.arrayBuffer()), ZIP);
+    assert.equal((await post("report-handled", { env: "prod", kind: "libraries", id: lib.id, handled: true })).status, 200);
+    const after = await list();
+    assert.deepEqual(after.reports.map((r) => [r.kind, r.handled !== null]).sort(), [["libraries", true], ["report", false]]);
+    assert.equal(after.unhandled, 1);
+    assert.equal((await ask("/console/api/report?env=prod&kind=other&id=1")).status, 400);
+  });
+
+  it("removes one report, or one set of libraries, with the parts of its zip, and nothing else", async () => {
+    zip("reports", 5, "aaaaaaaaaaaa", daysAgo(1));
+    zip("reports", 6, "bbbbbbbbbbbb", daysAgo(1));
+    zip("libraries", 5, "aaaaaaaaaaaa", daysAgo(1));
+    db.prepare("INSERT INTO report_parts (report_id, seq, data) VALUES (1, 0, 'UEsDBA==')").run();
+    db.prepare("INSERT INTO library_parts (report_id, seq, data) VALUES (1, 0, 'UEsDBA==')").run();
+    assert.equal((await post("report-remove", { env: "prod", id: 1 })).status, 200);
+    assert.deepEqual(db.prepare("SELECT id FROM reports").all().map((r) => r.id), [2]);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM report_parts").get().n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM libraries").get().n, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM library_parts").get().n, 1);
+    assert.equal((await post("report-remove", { env: "prod", kind: "libraries", id: 1 })).status, 200);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM libraries").get().n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM library_parts").get().n, 0);
+    assert.equal((await post("report-remove", { env: "prod", id: 1 })).status, 404);
+    assert.equal((await post("report-remove", { env: "prod", kind: "x", id: 2 })).status, 400);
+    assert.equal((await post("report-remove", { env: "prod", id: 0 })).status, 400);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM reports").get().n, 1);
+  });
+
+  it("needs a request from the console page to remove anything, like every other change", async () => {
+    zip("reports", 5, "aaaaaaaaaaaa", daysAgo(1));
+    assert.equal((await ask("/console/api/report-remove", { method: "POST", body: { env: "prod", id: 1 }, page: false })).status, 403);
+    assert.equal((await ask("/console/api/report-remove", { method: "POST", body: { env: "prod", id: 1 }, jwt: null })).status, 404);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM reports").get().n, 1);
+  });
+
+  it("counts what a clearing would remove before it removes it, then removes the reports and libraries older than the age, with their parts, in that set only", async () => {
+    zip("reports", 1, "aaaaaaaaaaaa", daysAgo(10));
+    zip("reports", 2, "bbbbbbbbbbbb", daysAgo(5));
+    zip("libraries", 3, "cccccccccccc", daysAgo(8));
+    zip("libraries", 4, "dddddddddddd", daysAgo(2));
+    zip("reports_test", 1, "aaaaaaaaaaaa", daysAgo(40));
+    db.prepare("INSERT INTO report_parts (report_id, seq, data) VALUES (1, 0, 'UEsDBA==')").run();
+    db.prepare("INSERT INTO library_parts (report_id, seq, data) VALUES (1, 0, 'UEsDBA==')").run();
+    db.prepare("INSERT INTO library_parts (report_id, seq, data) VALUES (2, 0, 'UEsDBA==')").run();
+    const counted = await (await post("reports-purge", { env: "prod", days: 7 })).json();
+    assert.deepEqual([counted.count, counted.removed], [2, false]);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM reports").get().n, 2);
+    const done = await (await post("reports-purge", { env: "prod", days: 7, confirm: true })).json();
+    assert.deepEqual([done.count, done.removed], [2, true]);
+    assert.deepEqual(db.prepare("SELECT app_id FROM reports").all().map((r) => r.app_id), [2]);
+    assert.deepEqual(db.prepare("SELECT app_id FROM libraries").all().map((r) => r.app_id), [4]);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM report_parts").get().n, 0);
+    assert.deepEqual(db.prepare("SELECT report_id FROM library_parts").all().map((r) => r.report_id), [2]);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM reports_test").get().n, 1);
+    assert.equal((await (await post("reports-purge", { env: "prod", days: 14, confirm: true })).json()).count, 0);
+    assert.equal((await (await post("reports-purge", { env: "test", days: 30, confirm: true })).json()).count, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM reports_test").get().n, 0);
+  });
+
+  it("clears only the ages it offers, and a report of that very day stays", async () => {
+    zip("reports", 1, "aaaaaaaaaaaa", daysAgo(7));
+    for (const days of [0, 1, 3, 15, "7", null]) assert.equal((await post("reports-purge", { env: "prod", days, confirm: true })).status, 400, String(days));
+    assert.equal((await (await post("reports-purge", { env: "prod", days: 7, confirm: true })).json()).count, 0);
+    assert.equal((await post("reports-purge", { env: "other", days: 7 })).status, 400);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM reports").get().n, 1);
+  });
+
+  it("still lists the reports, counts and clears them on a database that has not had the migration of the libraries", async () => {
+    db.exec("DROP TABLE libraries; DROP TABLE libraries_test; DROP TABLE library_parts; DROP TABLE library_parts_test;");
+    zip("reports", 1, "aaaaaaaaaaaa", daysAgo(20));
+    zip("reports", 2, "bbbbbbbbbbbb", daysAgo(1));
+    const answer = await list();
+    assert.deepEqual([answer.reports.map((r) => r.kind), answer.total, answer.unhandled], [["report", "report"], 2, 2]);
+    assert.equal((await (await post("reports-purge", { env: "prod", days: 14, confirm: true })).json()).count, 1);
+    assert.deepEqual(db.prepare("SELECT app_id FROM reports").all().map((r) => r.app_id), [2]);
   });
 });
 

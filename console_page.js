@@ -30,6 +30,9 @@ button, input, select { font:inherit; color:inherit; }
 .lang-pick { margin-left:auto; }
 main { display:grid; grid-template-columns:minmax(280px,360px) minmax(0,1fr); gap:20px; padding:20px 28px 32px; width:100%; }
 @media (max-width:820px) { main { grid-template-columns:1fr; } }
+/* The page of the reports has no column of games: the table takes the whole width. */
+body[data-view="reports"] main { grid-template-columns:minmax(0,1fr); }
+body[data-view="reports"] main > .panel:first-child { display:none; }
 main > .panel:first-child { position:relative; z-index:4; }
 .panel { background:var(--card); border:1px solid var(--line); border-radius:20px; padding:20px; box-shadow:0 12px 34px rgba(0,0,0,.22); -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px); }
 h2 { margin:0 0 12px; font-size:17px; }
@@ -278,6 +281,22 @@ th { text-align:left; color:var(--muted); font-weight:500; font-size:13px; paddi
 td { padding:8px; border-top:1px solid var(--line); vertical-align:middle; }
 td { white-space:nowrap; }
 .actions { display:flex; gap:6px; flex-wrap:nowrap; }
+.filters { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:12px 0; }
+.filters .field { width:auto; flex:1 1 180px; min-width:150px; max-width:260px; }
+.filters .count { color:var(--muted); }
+.ac { position:relative; flex:1 1 180px; min-width:150px; max-width:260px; }
+.filters .ac .field { width:100%; min-width:0; max-width:none; }
+.ac-menu { position:absolute; top:calc(100% + 4px); left:0; min-width:100%; width:max-content; max-width:380px; max-height:320px; overflow:auto; z-index:30; padding:4px; border:1px solid var(--line); border-radius:var(--r-control); background:#1b2130; box-shadow:0 10px 30px rgba(0,0,0,.45); }
+.ac-item { display:flex; align-items:center; gap:10px; width:100%; padding:5px 8px; border:0; border-radius:8px; background:none; color:inherit; font:inherit; text-align:left; cursor:pointer; }
+.ac-item:hover, .ac-item.active { background:rgba(255,255,255,.1); }
+.ac-item img { width:22px; height:32px; object-fit:cover; border-radius:4px; background:#0f131b; flex:none; }
+.ac-mark { display:inline-flex; width:22px; justify-content:center; flex:none; }
+.ac-item .discord-icon { margin:0; }
+.selbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0 0 12px; padding:8px 12px; border:1px solid var(--line); border-radius:var(--r-control); background:rgba(255,255,255,.04); }
+.selbar .count { color:var(--muted); margin-right:auto; }
+.check-cell { width:34px; text-align:center; }
+.check-cell input { width:18px; height:18px; cursor:pointer; accent-color:#fff; }
+.btn.icon { width:38px; padding:0; display:inline-flex; align-items:center; justify-content:center; }
 .scroll { overflow-x:auto; }
 .gap { margin-top:24px; }
 .langs { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
@@ -340,7 +359,7 @@ a.btn { display:inline-flex; align-items:center; text-decoration:none; }
   </div>
   <nav class="pages" aria-label="Pages">
     <a class="banner-btn" id="home" href="/console/test"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg>Home</a>
-    <a class="banner-btn" id="latest" href="/console/test/reports"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/></svg>Latest reports<span class="badge" id="latest-count" hidden></span></a>
+    <a class="banner-btn" id="latest" href="/console/test/reports"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/></svg>Reports<span class="badge" id="latest-count" hidden></span></a>
     <a class="banner-btn" id="news" href="/console/test/news"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/></svg>What is new<span class="badge" id="news-count" hidden></span></a>
     <a class="banner-btn" id="players" href="/console/test/players"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.5 3-6 6.5-6s6.5 2.5 6.5 6"/><circle cx="17" cy="9" r="2.5"/><path d="M17 14c2.5 0 4.5 2 4.5 5"/></svg>Players</a>
     <a class="banner-btn" id="incompatible" href="/console/test/incompatible"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>Incompatible games</a>
@@ -383,13 +402,13 @@ try {
 var FR = {
   "GamePort console": "Console GamePort", "Environment": "Environnement", "Pages": "Pages", "Language": "Langue", "Period": "Période",
   "Search a game": "Rechercher un jeu", "Device": "Appareil", "Status of the games": "Statut des jeux", "Games": "Jeux",
-  "Home": "Accueil", "Latest reports": "Derniers rapports", "What is new": "Nouveautés", "Incompatibility reasons": "Raisons d'incompatibilité", "Game settings": "Réglages des jeux",
+  "Home": "Accueil", "Reports": "Rapports", "What is new": "Nouveautés", "Incompatibility reasons": "Raisons d'incompatibilité", "Game settings": "Réglages des jeux",
   "Only games with votes": "Seulement les jeux avec des votes", "Pick a game.": "Choisir un jeu.", "All devices": "Tous les appareils", "All statuses": "Tous les statuts",
   "Works": "Marche", "Offline only": "Hors ligne seulement", "Does not work": "Ne marche pas", "Works offline only": "Marche hors ligne seulement",
   "Work": "Marchent", "Work offline only": "Marchent hors ligne seulement", "Do not work": "Ne marchent pas", "No vote": "Aucun vote", "no vote": "aucun vote",
   "Passthrough": "Passthrough", "Saved": "Enregistré", "Removed": "Retiré", "Deleted": "Supprimé", "Edit": "Modifier", "Delete": "Supprimer", "Remove": "Retirer", "Save": "Enregistrer",
   "Game": "Jeu", "Setting": "Réglage", "Since": "Depuis", "Player": "Joueur", "Day": "Jour", "Answer": "Réponse", "State": "État", "Size": "Taille", "Problems": "Problèmes", "Report": "Rapport",
-  "Reopen": "Rouvrir", "Mark handled": "Marquer comme traité", "Back to waiting": "Remis en attente", "Marked handled": "Marqué comme traité", "Download": "Télécharger", "To handle": "À traiter",
+  "Reopen": "Rouvrir", "Libraries": "Bibliothèques", "Older than 1 week": "Plus d'une semaine", "Older than 2 weeks": "Plus de 2 semaines", "Older than 1 month": "Plus d'un mois", "Any age": "Toutes les dates", "Type": "Type", "All types": "Tous les types", "Reports only": "Rapports seulement", "Libraries only": "Bibliothèques seulement", "Mark selection handled": "Marquer la sélection comme traitée", "Reopen selection": "Rouvrir la sélection", "Already handled": "Déjà traité", "Nothing to reopen": "Rien à rouvrir", "Age": "Ancienneté", "Search a player": "Rechercher un joueur", "Search a device": "Rechercher un appareil", "Select all": "Tout sélectionner", "Select": "Sélectionner", "Download selection": "Télécharger la sélection", "Delete selection": "Supprimer la sélection", "Mark handled": "Marquer comme traité", "Back to waiting": "Remis en attente", "Marked handled": "Marqué comme traité", "Download": "Télécharger", "To handle": "À traiter",
   "Report sent": "Rapport envoyé", "The relay has the report": "Le relais a le rapport", "Report waiting": "Rapport en attente",
   "Kept on the device: no network, or the relay was busy": "Gardé sur l'appareil : pas de réseau, ou le relais était occupé",
   "Report refused": "Rapport refusé", "The relay would not take the report": "Le relais n'a pas pris le rapport", "No report": "Aucun rapport",
@@ -496,11 +515,13 @@ var FR_RULES = [
   [/(\\d+) players?/g, function (m, n) { return plFr(n, "joueur", "joueurs"); }],
   [/(\\d+) games?/g, function (m, n) { return plFr(n, "jeu", "jeux"); }],
   [/(\\d+) votes?/g, function (m, n) { return plFr(n, "vote", "votes"); }],
+  [/^Showing (\\d+) of (\\d+)$/, "$1 sur $2 affichés"],
+  [/^Deleted (\\d+)$/, "$1 supprimés"],
   [/(\\d+) reports?\\b/g, function (m, n) { return plFr(n, "rapport", "rapports"); }],
   [/(\\d+) do not work/g, "$1 ne marchent pas"], [/(\\d+) does not work/g, "$1 ne marche pas"],
   [/(\\d+) work offline only/g, "$1 marchent hors ligne seulement"], [/(\\d+) work\\b/g, "$1 marchent"],
   [/(\\d+) offline only/g, "$1 hors ligne seulement"],
-  [/\\bAnswers \\((\\d+)\\)/g, "Réponses ($1)"], [/\\bReports \\((\\d+)\\)/g, "Rapports ($1)"], [/\\bLatest reports \\((.+?)\\)/g, "Derniers rapports ($1)"],
+  [/\\bAnswers \\((\\d+)\\)/g, "Réponses ($1)"], [/\\bReports \\((\\d+)\\)/g, "Rapports ($1)"], [/^Reports \\((production|test)\\)$/, "Rapports ($1)"], [/^(\\d+) selected$/, "$1 sélectionné(s)"], [/Delete (\\d+) selected report\\(s\\) and libraries\\?/g, "Supprimer $1 rapport(s) et bibliothèques sélectionnés ?"],
   [/\\bOverview \\((production|test)\\)/g, "Vue d'ensemble ($1)"], [/\\bWhat is new \\((production|test)\\)/g, "Nouveautés ($1)"], [/\\bGame settings \\((production|test)\\)/g, "Réglages des jeux ($1)"],
   [/\\bReasons for incompatibility \\((production|test)\\)/g, "Raisons d'incompatibilité ($1)"],
   [/\\bNew games \\((\\d+) in 31 days\\)/g, "Nouveaux jeux ($1 en 31 jours)"], [/\\bChanges between versions of GamePort \\((\\d+)\\)/g, "Changements entre versions de GamePort ($1)"],
@@ -638,6 +659,11 @@ function call(path, message) {
 /** Every change in production asks first, with what it is about. */
 function confirmWrite(text) {
   return state.env !== "prod" || window.confirm("PRODUCTION\\n\\n" + text + "\\n\\nThis changes the real votes at once.");
+}
+
+/** Removing reports cannot be undone, in production or in the test set: it always asks first, with what it is about. */
+function confirmRemoval(text) {
+  return window.confirm((state.env === "prod" ? "PRODUCTION\\n\\n" : "") + text + "\\n\\nThis cannot be undone.");
 }
 
 var NAV_PATHS = { home: "", latest: "/reports", news: "/news", players: "/players", incompatible: "/incompatible", reasons: "/reasons", defaults: "/defaults" };
@@ -1158,10 +1184,10 @@ function allGames() {
 
 /** How many reports wait in this set, and for which games: the badge of the button and the dots of the list. */
 function loadWaiting() {
-  return call("/console/api/reports?env=" + state.env).then(function (data) {
+  return call("/console/api/reports?env=" + state.env + "&limit=1").then(function (data) {
     state.unhandled = data.unhandled;
     state.waiting = {};
-    data.reports.forEach(function (r) { if (!r.handled) state.waiting[r.appId] = (state.waiting[r.appId] || 0) + 1; });
+    Object.keys(data.waiting || {}).forEach(function (id) { state.waiting[Number(id)] = data.waiting[id]; });
     var badge = document.getElementById("latest-count");
     badge.textContent = String(state.unhandled);
     badge.hidden = !state.unhandled;
@@ -1178,6 +1204,7 @@ function majority(c) {
 
 /** The address says the set and what is open (/console/prod/1125240, /console/test/news): a refresh, a copied link or a bookmark comes back to the same place. */
 function syncUrl() {
+  document.body.setAttribute("data-view", state.view || "");
   if (!state.ready) return;
   var tail = state.view === "player" && state.playerId ? "/player/" + state.playerId : state.view === "group" && state.groupKind ? "/" + state.groupKind + "/" + encodeURIComponent(state.groupValue) : state.view === "game" && state.current ? "/" + state.current.appid : state.view === "reports" || state.view === "news" || state.view === "reasons" || state.view === "incompatible" || state.view === "defaults" || state.view === "players" ? "/" + state.view : "";
   var path = "/console/" + state.env + tail + (state.onlyVoted ? "?voted" : "");
@@ -1358,9 +1385,12 @@ function answerPill(r) {
 }
 
 /** The reports as a table. Each has what the player answered, whether it waits or was handled, a link that saves the zip and a button to mark it. A game name is shown when the reports are of several games. */
-function reportsTable(reports, withGame, refresh, hidePlayer) {
-  var head = ["Answer"].concat(withGame ? ["Game"] : [], hidePlayer ? [] : ["Player"], ["Device", "GamePort", "Day", "State", "Size", ""]);
-  var table = el("table", {}, [el("thead", {}, [el("tr", {}, head.map(function (h) { return el("th", h === "Answer" ? { text: h, class: "icon-cell" } : { text: h }); }))])]);
+function reportsTable(reports, withGame, refresh, hidePlayer, selection) {
+  var head = ["Answer"].concat(withGame ? ["Game"] : [], hidePlayer ? [] : ["Player"], ["Device", "GamePort", "Date", "State", "Size", ""]);
+  var headCells = head.map(function (h) { return el("th", h === "Answer" ? { text: h, class: "icon-cell" } : { text: h }); });
+  // With a [selection] (the page of all reports) a first column of check boxes, with no title, picks the lines the action bar acts on; the one in the head picks them all.
+  if (selection) headCells.unshift(el("th", { class: "check-cell" }, [el("input", { type: "checkbox", "aria-label": "Select all", onchange: function (event) { selection.toggleAll(event.target.checked); } })]));
+  var table = el("table", {}, [el("thead", {}, [el("tr", {}, headCells)])]);
   var body = el("tbody");
   reports.forEach(function (r) {
     var game = allGames().filter(function (g) { return g.appid === r.appId; })[0];
@@ -1379,17 +1409,30 @@ function reportsTable(reports, withGame, refresh, hidePlayer) {
     }
     // A game whose name is still being asked: the cell is written when the answer comes.
     if (game && game.pending) game.pending.then(function () { setName(game.name); });
-    var toggle = el("button", { type: "button", class: "btn", text: r.handled ? "Reopen" : "Mark handled", onclick: function () {
-      call("/console/api/report-handled", { id: r.id, handled: !r.handled })
+    // The three actions of a line are icons, the words are in their tooltip.
+    var toggle = iconButton(r.handled ? ICON_REOPEN : ICON_HANDLED, r.handled ? "Reopen" : "Mark handled", "", function () {
+      call("/console/api/report-handled", { id: r.id, kind: r.kind, handled: !r.handled })
         .then(function () { toast(r.handled ? "Back to waiting" : "Marked handled"); loadWaiting(); refresh(); }).catch(function (e) { toast(e.message, true); });
-    } });
-    var download = el("a", { class: "btn fill", href: "/console/api/report?env=" + state.env + "&id=" + r.id, download: "gameport-report-" + r.appId + "-" + r.id + ".zip", text: "Download" });
+    });
+    // Taking the zip handles the report (the relay does it), so the line is drawn again a moment later.
+    var download = el("a", { class: "btn icon fill", title: "Download", "aria-label": "Download", onclick: function () { setTimeout(function () { loadWaiting(); refresh(); }, 1500); }, href: "/console/api/report?env=" + state.env + "&kind=" + r.kind + "&id=" + r.id, download: "gameport-" + (r.kind === "libraries" ? "libraries" : "report") + "-" + r.appId + "-" + r.id + ".zip" }, [iconSvg(ICON_DOWNLOAD, 18, "")]);
+    var remove = iconButton(ICON_TRASH, "Delete", "danger", function () {
+      if (!confirmRemoval("Delete this " + (r.kind === "libraries" ? "set of libraries" : "report") + " (" + (game ? game.name : "App " + r.appId) + ", " + r.updated + ")?")) return;
+      call("/console/api/report-remove", { id: r.id, kind: r.kind })
+        .then(function () { toast("Deleted"); loadWaiting(); refresh(); }).catch(function (e) { toast(e.message, true); });
+    });
     var cells = [el("td", { class: "icon-cell" }, [answerPill(r)])].concat(withGame ? [nameCell] : [], hidePlayer ? [] : [el("td", {}, [playerLink(r.voter, r.label, true)])], [
       el("td", {}, [document.createTextNode(r.device), modelLine(r)]), el("td", { text: r.app }), el("td", { text: formatDay(r.updated) }),
       el("td", {}, [r.handled ? el("span", { class: "muted", text: "Handled " + r.handled }) : el("span", { class: "todo", text: "To handle" })]),
-      el("td", { text: size(r.size) }),
-      el("td", {}, [el("div", { class: "actions" }, [download, toggle])]),
+      el("td", {}, [document.createTextNode(size(r.size)), r.kind === "libraries" ? el("div", {}, [el("span", { class: "chip", text: "Libraries" })]) : null]),
+      el("td", {}, [el("div", { class: "actions" }, [download, toggle, remove])]),
     ]);
+    if (selection) {
+      var key = r.kind + ":" + r.id;
+      var box = el("input", { type: "checkbox", class: "row-check", "aria-label": "Select", onchange: function (event) { selection.toggle(key, event.target.checked); } });
+      box.checked = !!selection.keys[key];
+      cells.unshift(el("td", { class: "check-cell" }, [box]));
+    }
     body.appendChild(el("tr", { class: r.handled ? "" : "waiting" }, cells));
   });
   table.appendChild(body);
@@ -1505,6 +1548,17 @@ function iconSvg(paths, size, cls) {
 var ANSWER_ICONS = { works: ["M4 12.5l5 5L20 6.5"], offline_only: ["M3 9c3-3 6 3 9 0s6 3 9 0", "M3 15c3-3 6 3 9 0s6 3 9 0"], fails: ["M6 6l12 12", "M18 6L6 18"], none: ["M6 12h12"] };
 var ICON_WARN = ["M12 3l10 18H2z", "M12 10v5", "M12 18h.01"];
 var ICON_REPORT = ["M6 3h9l4 4v14H6z", "M15 3v4h4", "M9 12h6", "M9 16h4"];
+var ICON_DOWNLOAD = ["M12 4v11", "M7 11l5 5 5-5", "M5 20h14"];
+var ICON_TRASH = ["M4 7h16", "M9 7V4h6v3", "M6 7l1 13h10l1-13", "M10 11v6", "M14 11v6"];
+var ICON_HANDLED = ["M4 12.5l5 5L20 6.5"];
+var ICON_REOPEN = ["M3 12a9 9 0 109-9", "M3 4v5h5"];
+
+/** A round button that holds an icon alone: its words are the tooltip and the label read aloud. [kind] is a variant of the button ("fill", "danger") or empty. */
+function iconButton(paths, label, kind, onclick) {
+  var button = el("button", { type: "button", class: "btn icon" + (kind ? " " + kind : ""), title: label, "aria-label": label, onclick: onclick });
+  button.appendChild(iconSvg(paths, 18, ""));
+  return button;
+}
 
 /** What the player ticked as going wrong, as one icon: the problems are in its tooltip, so the column stays narrow. */
 function problemIcon(codes) {
@@ -2290,6 +2344,54 @@ function drawNews(panel, data) {
   panel.appendChild(list);
 }
 
+/**
+ * A search field that completes from a list drawn by the page itself (a field with a native list cannot show a picture). [options] gives, when the list opens, the lines
+ * ({ value, mark }: [mark] makes the node drawn before the text, or is null); typing filters them, a click or Enter picks one, Escape closes. [onPick] gets what the field holds, at every change.
+ */
+function completer(placeholder, options, onPick) {
+  var input = el("input", { type: "search", class: "field", placeholder: placeholder, "aria-label": placeholder, autocomplete: "off" });
+  var menu = el("div", { class: "ac-menu", hidden: "" });
+  var active = -1;
+  var close = function () { menu.hidden = true; active = -1; };
+  var choose = function (value) { input.value = value; close(); onPick(value); };
+  var light = function () { Array.prototype.forEach.call(menu.children, function (item, i) { item.classList.toggle("active", i === active); }); };
+  var open = function () {
+    var typed = input.value.trim().toLowerCase();
+    var lines = options().filter(function (o) { return !typed || o.value.toLowerCase().indexOf(typed) >= 0; }).slice(0, 60);
+    menu.textContent = "";
+    active = -1;
+    lines.forEach(function (o) {
+      var children = [o.mark ? o.mark() : null, el("span", { class: "ac-text", text: o.value })];
+      menu.appendChild(el("button", { type: "button", class: "ac-item", tabindex: "-1", "data-value": o.value, onmousedown: function (event) { event.preventDefault(); choose(o.value); } }, children));
+    });
+    menu.hidden = !lines.length;
+  };
+  input.addEventListener("input", function () { onPick(input.value); open(); });
+  input.addEventListener("focus", open);
+  input.addEventListener("blur", close);
+  input.addEventListener("keydown", function (event) {
+    var count = menu.children.length;
+    if (event.key === "Escape") close();
+    else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      if (menu.hidden) open();
+      count = menu.children.length;
+      if (!count) return;
+      event.preventDefault();
+      active = (active + (event.key === "ArrowDown" ? 1 : -1) + count) % count;
+      light();
+      menu.children[active].scrollIntoView({ block: "nearest" });
+    } else if (event.key === "Enter" && active >= 0 && menu.children[active]) {
+      event.preventDefault();
+      choose(menu.children[active].getAttribute("data-value"));
+    }
+  });
+  return el("div", { class: "ac" }, [input, menu]);
+}
+
+/**
+ * The page of all the reports and libraries. Every one is loaded (200 at a time), then filtered here: by game, by player and by device (each a field that completes from the values that
+ * have a report, nothing else), and by age. A column of check boxes picks lines, and the bar above the table downloads or deletes what is picked.
+ */
 function showLatestReports() {
   state.current = null;
   state.view = "reports";
@@ -2297,12 +2399,143 @@ function showLatestReports() {
   drawGames();
   var panel = document.getElementById("detail");
   panel.textContent = "";
-  panel.appendChild(el("h2", { text: "Latest reports (" + (state.env === "prod" ? "production" : "test") + ")" }));
-  call("/console/api/reports?env=" + state.env).then(function (data) {
-    // Only the last request draws: a switch of environment, or a second click, must not add a second table.
-    if (mine !== reportsAsked || state.view !== "reports") return;
-    panel.appendChild(data.reports.length ? reportsTable(data.reports, true, showLatestReports) : el("p", { class: "muted", text: "No report." }));
-  }).catch(function (e) { toast(e.message, true); });
+  panel.appendChild(el("h2", { text: "Reports (" + (state.env === "prod" ? "production" : "test") + ")" }));
+  var all = [];
+  var filter = { game: "", player: "", device: "", age: "", kind: "" };
+  var selected = {};
+  var keyOf = function (r) { return r.kind + ":" + r.id; };
+  var gameOf = function (r) {
+    var g = allGames().filter(function (x) { return x.appid === r.appId; })[0];
+    if (!g) { g = { appid: r.appId, name: "App " + r.appId, vr: false, installable: true, extra: true }; state.extra[r.appId] = g; resolveName(g); }
+    return g;
+  };
+  var playerOf = function (r) { return r.label || r.voter; };
+  var deviceOf = function (r) { return r.deviceName || r.model || r.codename || r.device; };
+  var has = function (text, typed) { return !typed || String(text || "").toLowerCase().indexOf(typed.toLowerCase()) >= 0; };
+  var visible = function () {
+    var cutoff = filter.age ? new Date(Date.now() - Number(filter.age) * 86400000).toISOString().slice(0, 10) : "";
+    return all.filter(function (r) {
+      return has(gameOf(r).name, filter.game) && has(playerOf(r) + " " + r.voter, filter.player)
+        && has([r.deviceName, r.model, r.codename, r.device].join(" "), filter.device) && (!cutoff || r.updated < cutoff) && (!filter.kind || r.kind === filter.kind);
+    });
+  };
+  var picked = function () { return all.filter(function (r) { return selected[keyOf(r)]; }); };
+
+  // Each field completes from what has a report: the games with their cover, the players with a Discord name first (with the mark of Discord), the devices.
+  var pick = function (name) { return function (value) { filter[name] = value.trim(); selected = {}; drawTable(); }; };
+  var gameOptions = function () {
+    var seen = {};
+    var games = [];
+    all.forEach(function (r) { var g = gameOf(r); if (!seen[g.appid]) { seen[g.appid] = true; games.push(g); } });
+    return games.sort(function (x, y) { return x.name.localeCompare(y.name); }).map(function (g) {
+      return { value: g.name, mark: function () { return g.cover ? el("img", { src: g.cover, alt: "", loading: "lazy" }) : el("span", { class: "ac-mark" }); } };
+    });
+  };
+  var playerOptions = function () {
+    var named = {};
+    var plain = {};
+    all.forEach(function (r) { if (r.label) named[r.label] = true; else plain[r.voter] = true; });
+    var sorted = function (set) { return Object.keys(set).sort(function (x, y) { return x.localeCompare(y); }); };
+    return sorted(named).map(function (name) { return { value: name, mark: function () { return el("span", { class: "ac-mark" }, [discordIcon(16)]); } }; })
+      .concat(sorted(plain).map(function (hash) { return { value: hash, mark: null }; }));
+  };
+  var deviceOptions = function () {
+    var seen = {};
+    all.forEach(function (r) { var name = deviceOf(r); if (name) seen[name] = true; });
+    return Object.keys(seen).sort(function (x, y) { return x.localeCompare(y); }).map(function (name) { return { value: name, mark: null }; });
+  };
+  var age = el("select", { class: "field", "aria-label": "Age", onchange: function (event) { filter.age = event.target.value; selected = {}; drawTable(); } }, [
+    el("option", { value: "", text: "Any age" }), el("option", { value: "7", text: "Older than 1 week" }),
+    el("option", { value: "14", text: "Older than 2 weeks" }), el("option", { value: "30", text: "Older than 1 month" }),
+  ]);
+  var kind = el("select", { class: "field", "aria-label": "Type", onchange: function (event) { filter.kind = event.target.value; selected = {}; drawTable(); } }, [
+    el("option", { value: "", text: "All types" }), el("option", { value: "report", text: "Reports only" }), el("option", { value: "libraries", text: "Libraries only" }),
+  ]);
+  var count = el("span", { class: "count" });
+  var filters = el("div", { class: "filters" }, [
+    completer("Search a game", gameOptions, pick("game")), completer("Search a player", playerOptions, pick("player")), completer("Search a device", deviceOptions, pick("device")),
+    kind, age, count,
+  ]);
+  var selbar = el("div", { class: "selbar" });
+  var holder = el("div");
+  panel.appendChild(filters);
+  panel.appendChild(selbar);
+  panel.appendChild(holder);
+
+  var downloadPicked = function () {
+    // One download after the other: a browser asks once to allow several, and refuses a burst.
+    picked().forEach(function (r, i) {
+      setTimeout(function () {
+        var link = el("a", { href: "/console/api/report?env=" + state.env + "&kind=" + r.kind + "&id=" + r.id, download: "gameport-" + (r.kind === "libraries" ? "libraries" : "report") + "-" + r.appId + "-" + r.id + ".zip" });
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }, i * 400);
+    });
+    // The relay handles each report it gives: the list is drawn again once the last one is taken.
+    setTimeout(function () { selected = {}; loadWaiting(); fetchAll(); }, picked().length * 400 + 1500);
+  };
+  var removePicked = function () {
+    var rows = picked();
+    if (!rows.length || !confirmRemoval("Delete " + rows.length + " selected report(s) and libraries?")) return;
+    rows.reduce(function (chain, r) { return chain.then(function () { return call("/console/api/report-remove", { id: r.id, kind: r.kind }); }); }, Promise.resolve())
+      .then(function () { toast("Deleted " + rows.length); })
+      .catch(function (e) { toast(e.message, true); })
+      .then(function () { selected = {}; loadWaiting(); fetchAll(); });
+  };
+  var markPicked = function (handled) {
+    var rows = picked().filter(function (r) { return handled ? !r.handled : !!r.handled; });
+    if (!rows.length) { toast(handled ? "Already handled" : "Nothing to reopen"); return; }
+    rows.reduce(function (chain, r) { return chain.then(function () { return call("/console/api/report-handled", { id: r.id, kind: r.kind, handled: handled }); }); }, Promise.resolve())
+      .then(function () { toast(handled ? "Marked handled" : "Back to waiting"); })
+      .catch(function (e) { toast(e.message, true); })
+      .then(function () { loadWaiting(); fetchAll(); });
+  };
+  var drawBar = function () {
+    var n = picked().length;
+    selbar.textContent = "";
+    selbar.appendChild(el("span", { class: "count", text: n + " selected" }));
+    var buttons = [
+      iconButton(ICON_DOWNLOAD, "Download selection", "fill", downloadPicked),
+      iconButton(ICON_HANDLED, "Mark selection handled", "", function () { markPicked(true); }),
+      iconButton(ICON_REOPEN, "Reopen selection", "", function () { markPicked(false); }),
+      iconButton(ICON_TRASH, "Delete selection", "danger", removePicked),
+    ];
+    buttons.forEach(function (button) { button.disabled = !n; selbar.appendChild(button); });
+  };
+  var drawTable = function () {
+    var rows = visible();
+    count.textContent = "Showing " + rows.length + " of " + all.length;
+    holder.textContent = "";
+    var selection = {
+      keys: selected,
+      toggle: function (key, on) { if (on) selected[key] = true; else delete selected[key]; drawBar(); },
+      toggleAll: function (on) {
+        rows.forEach(function (r) { if (on) selected[keyOf(r)] = true; else delete selected[keyOf(r)]; });
+        Array.prototype.forEach.call(holder.querySelectorAll("input.row-check"), function (box) { box.checked = on; });
+        drawBar();
+      },
+    };
+    holder.appendChild(rows.length ? reportsTable(rows, true, fetchAll, false, selection) : el("p", { class: "muted", text: "No report." }));
+    drawBar();
+  };
+  var fetchAll = function () {
+    var list = [];
+    var next = function (offset) {
+      return call("/console/api/reports?env=" + state.env + "&limit=200&offset=" + offset).then(function (data) {
+        list = list.concat(data.reports);
+        return data.hasMore && data.reports.length ? next(list.length) : null;
+      });
+    };
+    return next(0).then(function () {
+      // Only the last request draws: a switch of environment, or a second click, must not add a second table.
+      if (mine !== reportsAsked || state.view !== "reports") return;
+      all = list;
+      drawTable();
+    }).catch(function (e) { toast(e.message, true); });
+  };
+  drawBar();
+  fetchAll();
 }
 
 /** Writes the price of an app after the text of a button: free, or what it costs and, on sale, the discount. */
@@ -2504,7 +2737,7 @@ function drawDetail() {
   ]));
 
   var reports = el("div");
-  call("/console/api/reports?env=" + state.env + "&appId=" + g.appid).then(function (data) {
+  call("/console/api/reports?env=" + state.env + "&appId=" + g.appid + "&limit=200").then(function (data) {
     if (!data.reports.length) return;
     reports.appendChild(el("h2", { text: "Reports of this game" }));
     reports.appendChild(reportsTable(data.reports, false, drawDetail));
@@ -2533,6 +2766,9 @@ function modelLine(v) {
 
 /** A day written YYYY-MM-DD, shown the way the browser of whoever reads the console writes dates. Anything else is shown as it is. */
 function formatDay(day) {
+  // A report keeps the minute it arrived (UTC): it is written in the hour of France, whatever the time zone of the reader.
+  var stamp = /^(\\d{4}-\\d{2}-\\d{2})T(\\d{2}:\\d{2}):\\d{2}Z$/.exec(day || "");
+  if (stamp) return new Date(stamp[1] + "T" + stamp[2] + ":00Z").toLocaleString(LANG === "fr" ? "fr-FR" : "en-GB", { timeZone: "Europe/Paris", year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   var m = /^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(day || "");
   if (!m) return day || "";
   var date = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
@@ -2542,7 +2778,7 @@ function formatDay(day) {
 /** When a vote arrived: the day and the hour (the relay keeps no finer time than the hour, UTC) in the time of whoever reads the console; the day alone for a vote from before it kept the hour. */
 function whenText(v) {
   var at = v.votedAt ? new Date(v.votedAt) : null;
-  if (at && !isNaN(at.getTime())) return at.toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit" });
+  if (at && !isNaN(at.getTime())) return at.toLocaleString(undefined, { timeZone: "Europe/Paris", year: "numeric", month: "short", day: "numeric", hour: "2-digit" });
   return v.updated ? formatDay(v.updated) : "";
 }
 
