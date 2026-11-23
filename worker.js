@@ -6,7 +6,7 @@
 import { handleConsole } from "./console.js";
 import { codesOf, deviceName as nameOf } from "./device_names.js";
 import { ISSUES, ISSUE_SET } from "./issues.js";
-import { notifyReport, notifyVote } from "./notify.js";
+import { notifyLibraries, notifyReport, notifyVote } from "./notify.js";
 import { compareVersions, fixedSince, parseVersion, turnsOf } from "./turns.js";
 
 // "offline_only": the game works, but only without the network (its online or multiplayer part does not).
@@ -27,7 +27,11 @@ const APP_VERSION = /^\d{1,3}\.\d{1,3}\.\d{1,3}(-alpha\.\d{1,5})?$/;
 const MAX_REPORT_BYTES = 2_000_000;
 const CHUNK_BYTES = 600_000;
 // The table of parts that goes with each table of reports. The names come from here and from nowhere else.
-const PARTS = { reports: "report_parts", reports_test: "report_parts_test" };
+const PARTS = { reports: "report_parts", reports_test: "report_parts_test", libraries: "library_parts", libraries_test: "library_parts_test" };
+// The libraries of a game that a player chose to send with a report (see migration 0028): the same way as a report, with a larger limit and a Discord name that must come with them.
+// The votes each set goes with, for the Discord name.
+const LIBRARIES = { libraries: "votes", libraries_test: "votes_test" };
+const MAX_LIBRARY_BYTES = 8_000_000;
 const REPORT_DAYS = 30;
 /** Fewer seconds of measured play than this say nothing about a game: the hook of GamePort gives no number below it, and the relay keeps none. */
 export const MIN_PERF_SECONDS = 180;
@@ -178,6 +182,8 @@ const ROUTES = {
   "/test/summary": { table: "votes_test", write: false },
   "/report": { table: "reports", report: true },
   "/test/report": { table: "reports_test", report: true },
+  "/libraries": { table: "libraries", report: true },
+  "/test/libraries": { table: "libraries_test", report: true },
   "/game-defaults": { table: "game_defaults", defaults: true },
   "/test/game-defaults": { table: "game_defaults_test", defaults: true },
   "/incompatible": { table: "incompatible", reasons: "incompatible_reasons", list: true },
@@ -345,14 +351,20 @@ async function report(request, env, table, ctx) {
     const { success } = await env.LIMITER.limit({ key: `report:${request.headers.get("CF-Connecting-IP") ?? "unknown"}` });
     if (!success) return reply(429, { error: "too many reports" });
   }
-  const { meta, error } = validateReportMeta(new URL(request.url).searchParams);
+  const params = new URL(request.url).searchParams;
+  const { meta, error } = validateReportMeta(params);
   if (error) return reply(400, { error });
+  // The libraries of a game never come without a name to talk to the player on Discord: no name, nothing is kept.
+  const library = table in LIBRARIES;
+  const discord = library ? cleanDiscordName(params.get("discord")) : null;
+  if (library && !discord) return reply(400, { error: "discord name needed" });
   const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.length > MAX_REPORT_BYTES) return reply(413, { error: "too large" });
+  if (bytes.length > (library ? MAX_LIBRARY_BYTES : MAX_REPORT_BYTES)) return reply(413, { error: "too large" });
   if (!looksLikeZip(bytes)) return reply(400, { error: "not a zip" });
   const voter = await voterHash(meta.voter, env.VOTER_SALT);
   const now = new Date();
-  const today = now.toISOString().slice(0, 10);
+  // The moment the zip arrived, by the relay's clock, to the minute and in UTC: the console writes it in the hour of France. A line from before this holds the day alone.
+  const today = `${now.toISOString().slice(0, 16)}:00Z`;
   const oldest = new Date(now.getTime() - REPORT_DAYS * 86_400_000).toISOString().slice(0, 10);
   const whole = bytes.length <= CHUNK_BYTES;
   try {
@@ -388,6 +400,18 @@ async function report(request, env, table, ctx) {
       // Nothing more can be done here.
     }
     return reply(500, { error: "not saved" });
+  }
+  if (library) {
+    await saveContact(env, LIBRARIES[table], voter, discord);
+    const environment = table === "libraries" ? "prod" : "test";
+    let id = 0;
+    try {
+      const [saved] = (await env.DB.prepare(`SELECT id FROM ${table} WHERE app_id = ? AND voter = ?`).bind(meta.appId, voter).all()).results;
+      id = saved ? saved.id : 0;
+    } catch {
+      // The message goes without its link.
+    }
+    notifyLibraries(env, ctx, new URL(request.url).origin, { id, appId: meta.appId, app: meta.app, device: meta.device, size: bytes.length, discord }, environment, voter);
   }
   if (table === "reports" || table === "reports_test") {
     const environment = table === "reports" ? "prod" : "test";

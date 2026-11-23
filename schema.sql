@@ -61,8 +61,8 @@ CREATE TABLE IF NOT EXISTS reports (
   device  TEXT    NOT NULL,  -- quest, pico, phone, tablet or other
   size    INTEGER NOT NULL,  -- bytes of the zip
   data    TEXT    NOT NULL,  -- the zip, base64; empty for a large one, whose parts are in report_parts
-  updated TEXT    NOT NULL,  -- the day, YYYY-MM-DD
-  handled TEXT,              -- the day the developer dealt with it; empty while it waits. A new report from the same player starts again as not handled
+  updated TEXT    NOT NULL,  -- the moment it came, YYYY-MM-DDTHH:MM:00Z (UTC); a line from before holds the day alone
+  handled TEXT,              -- the day the developer dealt with it (the day its zip was first taken, or marked by hand); empty while it waits. A new report from the same player starts again as not handled
   UNIQUE (app_id, voter)
 );
 
@@ -186,4 +186,42 @@ CREATE TABLE IF NOT EXISTS game_defaults_test (
   value   TEXT    NOT NULL,
   updated TEXT    NOT NULL,
   PRIMARY KEY (app_id, setting)
+);
+
+-- The libraries of a game that a player chose to send with a report: the same shape as the reports, in tables of their own (see migration 0028).
+CREATE TABLE IF NOT EXISTS libraries (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  app_id  INTEGER NOT NULL,
+  voter   TEXT    NOT NULL,
+  app     TEXT    NOT NULL,
+  device  TEXT    NOT NULL,
+  size    INTEGER NOT NULL,
+  data    TEXT    NOT NULL,
+  updated TEXT    NOT NULL,
+  handled TEXT,
+  UNIQUE (app_id, voter)
+);
+CREATE TABLE IF NOT EXISTS libraries_test (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  app_id  INTEGER NOT NULL,
+  voter   TEXT    NOT NULL,
+  app     TEXT    NOT NULL,
+  device  TEXT    NOT NULL,
+  size    INTEGER NOT NULL,
+  data    TEXT    NOT NULL,
+  updated TEXT    NOT NULL,
+  handled TEXT,
+  UNIQUE (app_id, voter)
+);
+CREATE TABLE IF NOT EXISTS library_parts (
+  report_id INTEGER NOT NULL,
+  seq       INTEGER NOT NULL,
+  data      TEXT    NOT NULL,
+  PRIMARY KEY (report_id, seq)
+);
+CREATE TABLE IF NOT EXISTS library_parts_test (
+  report_id INTEGER NOT NULL,
+  seq       INTEGER NOT NULL,
+  data      TEXT    NOT NULL,
+  PRIMARY KEY (report_id, seq)
 );

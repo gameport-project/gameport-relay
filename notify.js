@@ -180,6 +180,32 @@ export function notifyVote(env, ctx, origin, vote, environment = "prod", player 
   })());
 }
 
+/** The message for the libraries a player chose to send: the link that takes the zip (through the console, like a report's), and the Discord name that came with it. */
+export function notifyLibraries(env, ctx, origin, library, environment = "prod", player = null) {
+  const webhook = webhookOf(env, environment);
+  if (!webhook) return undefined;
+  return later(ctx, (async () => {
+    const info = await gameInfo(library.appId);
+    const name = info.name;
+    const who = await playerOf(env, origin, player, environment);
+    await send(webhook, {
+      title: `${environment === "test" ? "[TEST] " : ""}New libraries: ${name}`,
+      url: `${origin}/console/${environment === "test" ? "test" : "prod"}/reports`,
+      description: `${library.id ? `[Download the libraries](${origin}/console/api/report?env=${environment}&kind=libraries&id=${library.id}) · ` : ""}[Steam](${steam(library.appId)}) · [Console](${consoleGame(origin, library.appId, environment)})${who.link}`,
+      thumbnail: { url: await cover(library.appId) },
+      color: 0x5865f2,
+      fields: [
+        ...(library.discord ? [field("Discord", library.discord)] : []),
+        field("Device", deviceText(library)),
+        field("GamePort", library.app),
+        field("Size", `${Math.max(1, Math.round(library.size / 1024))} KB`),
+        field("App", library.appId),
+        ...who.fields,
+      ],
+    }, `New libraries · ${deviceText(library)} · ${name}`);
+  })());
+}
+
 export function notifyReport(env, ctx, origin, report, verdict, environment = "prod", player = null) {
   const webhook = webhookOf(env, environment);
   if (!webhook) return undefined;

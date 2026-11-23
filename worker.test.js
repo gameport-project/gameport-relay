@@ -357,6 +357,86 @@ describe("the migration that allows the answer offline only", () => {
 });
 
 
+describe("the libraries of a game", () => {
+  let db;
+  let env;
+  const ZIP = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 250, 251, 252, 253, 254, 255]);
+  const zipOf = (size) => {
+    const bytes = new Uint8Array(size);
+    for (let i = 0; i < size; i++) bytes[i] = (i * 31 + (i >> 8)) & 255;
+    bytes.set([0x50, 0x4b, 0x03, 0x04]);
+    return bytes;
+  };
+  const query = (extra = {}) => new URLSearchParams({ appId: "726830", app: "0.9.5", device: "pico", voter: VOTER, discord: "some.player", ...extra }).toString();
+  const send = (body = ZIP, path = "/libraries", extra = {}) => new Request(`https://relay.example.invalid${path}?${query(extra)}`, { method: "POST", body });
+  const count = (table) => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
+
+  beforeEach(() => {
+    db = new DatabaseSync(":memory:");
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    env = { DB: d1(db), VOTER_SALT: "salt", ADMIN_TOKEN: "the-developer-token" };
+  });
+
+  it("keeps them in a table of their own and the Discord name in the players' table, and never touches the player's real report", async () => {
+    await worker.fetch(new Request(`https://relay.example.invalid/report?${new URLSearchParams({ appId: "726830", app: "0.9.5", device: "pico", voter: VOTER })}`, { method: "POST", body: ZIP }), env);
+    assert.equal((await worker.fetch(send(), env)).status, 204);
+    assert.equal(count("reports"), 1);
+    assert.equal(count("libraries"), 1);
+    const row = db.prepare("SELECT app_id, device, size, updated FROM libraries").get();
+    assert.deepEqual({ ...row, updated: undefined }, { app_id: 726830, device: "pico", size: ZIP.length, updated: undefined });
+    assert.deepEqual(db.prepare("SELECT discord FROM player_contacts").all().map((r) => r.discord), ["some.player"]);
+  });
+
+  it("refuses them without a Discord name, or with one that is only made of what is cleaned away", async () => {
+    for (const discord of ["", "   ", "@@", "<>"]) assert.equal((await worker.fetch(send(ZIP, "/libraries", { discord }), env)).status, 400, discord);
+    const without = new URLSearchParams({ appId: "726830", app: "0.9.5", device: "pico", voter: VOTER });
+    assert.equal((await worker.fetch(new Request(`https://relay.example.invalid/libraries?${without}`, { method: "POST", body: ZIP }), env)).status, 400);
+    assert.equal(count("libraries"), 0);
+    assert.equal(count("player_contacts"), 0);
+  });
+
+  it("takes up to 8 000 000 bytes, in parts, and gives them back byte for byte, and refuses one more byte", async () => {
+    const big = zipOf(8_000_000);
+    assert.equal((await worker.fetch(send(big), env)).status, 204);
+    assert.equal((await worker.fetch(send(zipOf(8_000_001), "/libraries", { appId: "42" }), env)).status, 413);
+    assert.equal(count("libraries"), 1);
+    const row = db.prepare("SELECT id, size, data FROM libraries").get();
+    assert.equal(row.data, "");
+    const parts = db.prepare("SELECT length(data) AS n FROM library_parts WHERE report_id = ? ORDER BY seq").all(row.id);
+    assert.ok(parts.length > 10 && parts.every((part) => part.n <= 800_000));
+    assert.equal(count("report_parts"), 0);
+    const { readReport } = await import("./worker.js");
+    assert.deepEqual(Buffer.from((await readReport(env, "libraries", row.id)).bytes), Buffer.from(big));
+  });
+
+  it("keeps one set per player and game, replaced by a new one, with the parts of the old one forgotten, and the two sets apart", async () => {
+    await worker.fetch(send(zipOf(1_300_000)), env);
+    await worker.fetch(send(ZIP, "/libraries", { app: "0.9.6" }), env);
+    assert.equal(count("libraries"), 1);
+    assert.equal(count("library_parts"), 0);
+    assert.equal(db.prepare("SELECT app FROM libraries").get().app, "0.9.6");
+    assert.equal((await worker.fetch(send(ZIP, "/test/libraries"), env)).status, 204);
+    assert.equal(count("libraries_test"), 1);
+    assert.equal(count("libraries"), 1);
+    assert.equal(db.prepare("SELECT discord FROM player_contacts_test").get().discord, "some.player");
+  });
+
+  it("refuses what is not a zip or has bad facts, answers 405 to a GET and 429 when the limiter says stop", async () => {
+    assert.equal((await worker.fetch(send(new Uint8Array([1, 2, 3, 4, 5, 6])), env)).status, 400);
+    assert.equal((await worker.fetch(send(ZIP, "/libraries", { appId: "0" }), env)).status, 400);
+    assert.equal((await worker.fetch(new Request(`https://relay.example.invalid/libraries?${query()}`), env)).status, 405);
+    const limiter = { limit: async () => ({ success: false }) };
+    assert.equal((await worker.fetch(send(), { ...env, LIMITER: limiter })).status, 429);
+    assert.equal(count("libraries"), 0);
+  });
+
+  it("removes the ones older than 30 days when a new one arrives", async () => {
+    db.prepare("INSERT INTO libraries (app_id, voter, app, device, size, data, updated) VALUES (1, 'aaaaaaaaaaaa', '0.9.5', 'pico', 4, 'UEsDBA==', '2000-01-01')").run();
+    await worker.fetch(send(), env);
+    assert.deepEqual(db.prepare("SELECT app_id FROM libraries").all().map((r) => r.app_id), [726830]);
+  });
+});
+
 describe("the reports", () => {
   let db;
   let env;
@@ -373,14 +453,15 @@ describe("the reports", () => {
     env = { DB: d1(db), VOTER_SALT: "salt", ADMIN_TOKEN: "the-developer-token" };
   });
 
-  it("stores a report, with the day and the size, and the zip as it came", async () => {
+  it("stores a report, with the moment it came (to the minute, UTC) and the size, and the zip as it came", async () => {
     assert.equal((await worker.fetch(send(), env)).status, 204);
     const row = db.prepare("SELECT * FROM reports").get();
     assert.equal(row.app_id, 846470);
     assert.equal(row.app, "0.7.4");
     assert.equal(row.device, "quest");
     assert.equal(row.size, ZIP.length);
-    assert.equal(row.updated, new Date().toISOString().slice(0, 10));
+    assert.match(row.updated, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
+    assert.equal(row.updated.slice(0, 10), new Date().toISOString().slice(0, 10));
     assert.deepEqual([...Buffer.from(row.data, "base64")], [...ZIP]);
     assert.equal(count("votes"), 0);
   });
@@ -662,6 +743,18 @@ describe("the messages to the developer's private channel", () => {
     assert.equal(embed.fields.find((f) => f.name === "Player").value, hash);
     assert.ok(embed.description.includes(`[Player](https://relay.example.invalid/console/prod/player/${hash})`), embed.description);
     assert.deepEqual(sent[0].body.allowed_mentions, { parse: [] });
+    assert.ok(!JSON.stringify(sent).includes(VOTER));
+  });
+
+  it("tells the libraries a player sent, with the Discord name and the link that takes the zip", async () => {
+    const query = new URLSearchParams({ appId: "846470", app: "0.7.4", device: "pico", voter: VOTER, discord: "Some Tester" });
+    assert.equal((await run(new Request(`https://relay.example.invalid/libraries?${query}`, { method: "POST", body: ZIP }))).status, 204);
+    assert.equal(sent.length, 1);
+    const embed = sent[0].body.embeds[0];
+    assert.match(embed.title, /New libraries: A Game/);
+    assert.equal(embed.fields.find((f) => f.name === "Discord").value, "Some Tester");
+    const id = db.prepare("SELECT id FROM libraries").get().id;
+    assert.ok(embed.description.includes(`/console/api/report?env=prod&kind=libraries&id=${id}`), embed.description);
     assert.ok(!JSON.stringify(sent).includes(VOTER));
   });
 
