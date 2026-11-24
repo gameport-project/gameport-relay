@@ -235,6 +235,19 @@ async function recordVote(env, table, values, issues, checked) {
 }
 
 /**
+ * The last answer of the player for the game that is not the one just given (null when there is none, or when the database has no history yet): the channel says it, so a "works"
+ * that follows a "does not work" is seen as the change it is. Read from the history, where every answer is a line.
+ */
+async function previousAnswer(env, table, appId, voter, verdict) {
+  try {
+    const [row] = (await env.DB.prepare(`SELECT verdict, app, updated FROM ${HISTORY[table]} WHERE app_id = ? AND voter = ? AND verdict <> ? ORDER BY id DESC LIMIT 1`).bind(appId, voter, verdict).all()).results;
+    return row ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The day a line of the history began: kept apart from `updated`, which a renewed answer moves forward, so the first sight of a player on a version and the day an answer was
  * first given stay known. A database that has not had migration 0023 has no such column: nothing is kept, and the answer is never lost for it.
  */
@@ -342,7 +355,10 @@ async function vote(request, env, table, ctx) {
   if (checked.discord !== undefined) await saveContact(env, table, voter, checked.discord);
   if (checked.model) await alignDevice(env, table, voter, checked.device, checked.model, checked.codename);
   // Each set tells its own channel: the real votes the real one, the test set the one for tries.
-  if (table === "votes" || table === "votes_test") notifyVote(env, ctx, new URL(request.url).origin, checked, table === "votes" ? "prod" : "test", voter);
+  if (table === "votes" || table === "votes_test") {
+    const before = await previousAnswer(env, table, checked.appId, voter, checked.verdict);
+    notifyVote(env, ctx, new URL(request.url).origin, checked, table === "votes" ? "prod" : "test", voter, before);
+  }
   return reply(204);
 }
 

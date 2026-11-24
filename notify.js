@@ -152,7 +152,10 @@ function later(ctx, work) {
   return work;
 }
 
-export function notifyVote(env, ctx, origin, vote, environment = "prod", player = null) {
+/** The player's earlier answer ({ verdict, app, updated }) as the channel says it: "Does not work (0.9.4-alpha.16, 2026-11-23)". */
+const beforeText = (before) => `${ANSWERS[before.verdict]?.text ?? before.verdict} (${before.app}, ${before.updated})`;
+
+export function notifyVote(env, ctx, origin, vote, environment = "prod", player = null, before = null) {
   const webhook = webhookOf(env, environment);
   if (!webhook) return undefined;
   return later(ctx, (async () => {
@@ -168,6 +171,7 @@ export function notifyVote(env, ctx, origin, vote, environment = "prod", player 
       color: answer.color,
       fields: [
         field("Answer", answer.text + (vote.offline && vote.verdict === "works" ? " (tried offline)" : "")),
+        ...(before ? [field("Before", beforeText(before))] : []),
         field("Device", deviceText(vote)),
         field("GamePort", vote.app),
         field("App", vote.appId),
