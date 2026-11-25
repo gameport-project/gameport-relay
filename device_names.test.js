@@ -7,7 +7,7 @@ test("the Pico 4 is known by each of its model codes", () => {
 });
 
 test("the Pico 4 Ultra is known by each of its model codes", () => {
-  for (const code of ["A92Y0", "A921C"]) assert.equal(deviceLabel(code, null), "Pico 4 Ultra");
+  for (const code of ["A92Y0", "A921C", "A9210"]) assert.equal(deviceLabel(code, null), "Pico 4 Ultra");
 });
 
 test("a headset whose model is not listed is named by its kind and its code", () => {

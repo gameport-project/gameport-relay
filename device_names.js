@@ -14,6 +14,7 @@ const HEADSET_MODELS = {
   A8210: "Pico 4 Pro",
   A92Y0: "Pico 4 Ultra",
   A921C: "Pico 4 Ultra",
+  A9210: "Pico 4 Ultra",
   B3110: "Pico Space Pro",
 };
 /** The headsets the console lists by kind of device, by the model code the app sends and the name shown: the first model of each name. */
