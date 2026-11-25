@@ -189,6 +189,8 @@ button.bar-row[aria-pressed="true"] { background:rgba(255,255,255,.06); border-c
 .stat-table td { text-align:right; padding:10px 6px; border-top:1px solid var(--line); font-size:15px; } .stat-table td:first-child { text-align:left; color:var(--muted); font-size:14px; }
 .stat-table b { font-size:19px; } .stat-table small { display:block; color:var(--muted); font-size:12px; }
 .line-works { fill:none; stroke:#4cc38a; stroke-width:2; } .line-offline_only { fill:none; stroke:#f0b24a; stroke-width:2; } .line-fails { fill:none; stroke:#ef6b6b; stroke-width:2; }
+.evo-hit { fill:transparent; } .evo-day:hover .evo-hit, .evo-day:focus .evo-hit { fill:rgba(255,255,255,.06); } .evo-day { outline:none; } .evo-dot { opacity:0; stroke:#1e2230; stroke-width:1.5; } .evo-day:hover .evo-dot, .evo-day:focus .evo-dot { opacity:1; }
+.dot-pt-works { fill:#4cc38a; } .dot-pt-offline_only { fill:#f0b24a; } .dot-pt-fails { fill:#ef6b6b; }
 .axis { stroke:rgba(255,255,255,.1); stroke-width:1; } .axis-text { fill:#98a2b3; font-size:9px; }
 .barstack { display:flex; gap:2px; height:14px; border-radius:999px; overflow:hidden; background:rgba(255,255,255,.07); }
 .barstack-part { display:flex; align-items:center; justify-content:center; flex-basis:0; min-width:18px; overflow:hidden; font-size:11px; font-weight:700; color:#10131a; text-shadow:0 1px 0 rgba(255,255,255,.25); }
@@ -1903,6 +1905,20 @@ function evolutionChart(series) {
       return x.toFixed(1) + "," + y.toFixed(1);
     }).join(" ");
     svg.appendChild(svgNode("polyline", { points: points, class: "line-" + key, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+  });
+  // One column per day, over the whole height: the pointer on it shows the day and the three counts in the popover, and a dot marks each line at that day.
+  var step = series.length > 1 ? (width - left - right) / (series.length - 1) : width - left - right;
+  var names = LANG === "fr" ? { works: "Marchent", offline_only: "Marchent hors ligne seulement", fails: "Ne marchent pas" } : { works: "Work", offline_only: "Work offline only", fails: "Do not work" };
+  series.forEach(function (d, i) {
+    var x = left + (series.length === 1 ? 0 : i * step);
+    var day = svgNode("g", { class: "evo-day", tabindex: "0", "data-tip": formatDay(d.day) + "\\n" + names.works + " : " + d.works + "\\n" + names.offline_only + " : " + d.offline_only + "\\n" + names.fails + " : " + d.fails });
+    var from = Math.max(left, x - step / 2), to = Math.min(width - right, x + step / 2);
+    day.appendChild(svgNode("rect", { x: from.toFixed(1), y: String(top), width: Math.max(1, to - from).toFixed(1), height: String(height - top - bottom), class: "evo-hit" }));
+    ["works", "offline_only", "fails"].forEach(function (key) {
+      var y = top + (1 - d[key] / max) * (height - top - bottom);
+      day.appendChild(svgNode("circle", { cx: x.toFixed(1), cy: y.toFixed(1), r: "3.5", class: "evo-dot dot-pt-" + key }));
+    });
+    svg.appendChild(day);
   });
   [0, series.length - 1].forEach(function (i, n) {
     var t = svgNode("text", { x: String(n ? width - right : left), y: String(height - 5), class: "axis-text", "text-anchor": n ? "end" : "start" });
