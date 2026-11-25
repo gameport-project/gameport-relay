@@ -129,7 +129,7 @@ details.incompat.is-incompatible > summary { color:#ff9a9a; }
 .ico { fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; vertical-align:middle; }
 .ico-warn { color:#f0b24a; } .ico-report-sent { color:#ef6b6b; } .ico-report-waiting { color:#f0b24a; } .ico-report-refused { color:#f0b24a; } .ico-report-none { color:var(--muted); }
 .tip { position:fixed; z-index:60; max-width:320px; padding:8px 12px; border-radius:10px; background:#1f2633; border:1px solid var(--line); box-shadow:0 10px 28px rgba(0,0,0,.45); font-size:13px; line-height:1.45; white-space:pre-line; pointer-events:none; opacity:0; transition:opacity .12s; }
-.tip.on { opacity:1; }
+.tip.on { opacity:1; } .tip .tone-works { color:#4cc38a; } .tip .tone-offline_only { color:#f0b24a; } .tip .tone-fails { color:#ef6b6b; }
 .icon-cell { text-align:center; width:1%; white-space:nowrap; } .ico-tip { display:inline-block; cursor:help; line-height:0; }
 .ico-ans { stroke-width:3; } .ico-ans-works { color:#4cc38a; } .ico-ans-offline_only { color:#f0b24a; } .ico-ans-fails { color:#ef6b6b; } .ico-ans-none { color:var(--muted); }
 .mk-works { color:#4cc38a; } .mk-offline_only { color:#f0b24a; } .mk-fails { color:#ef6b6b; }
@@ -1521,7 +1521,16 @@ function tipShow(target) {
   var text = target.getAttribute("data-tip");
   if (!text) return;
   if (!tipBox) { tipBox = el("div", { class: "tip", role: "tooltip" }); document.body.appendChild(tipBox); }
-  tipBox.textContent = text.split("\\n").map(function (line) { return LANG === "fr" ? trText(line) : line; }).join("\\n");
+  var tones = (target.getAttribute("data-tip-tones") || "").split(",");
+  if (tones.length > 1 || tones[0]) {
+    // A line may take the colour of its answer: data-tip-tones names one tone per line (empty for none), drawn by the classes tone-works, tone-offline_only and tone-fails.
+    tipBox.textContent = "";
+    text.split("\\n").forEach(function (line, i) {
+      tipBox.appendChild(el("div", { class: tones[i] ? "tone-" + tones[i] : "", text: LANG === "fr" ? trText(line) : line }));
+    });
+  } else {
+    tipBox.textContent = text.split("\\n").map(function (line) { return LANG === "fr" ? trText(line) : line; }).join("\\n");
+  }
   tipBox.style.left = "0px";
   tipBox.style.top = "0px";
   var anchor = target.getBoundingClientRect();
@@ -1911,7 +1920,7 @@ function evolutionChart(series) {
   var names = LANG === "fr" ? { works: "Marchent", offline_only: "Marchent hors ligne seulement", fails: "Ne marchent pas" } : { works: "Work", offline_only: "Work offline only", fails: "Do not work" };
   series.forEach(function (d, i) {
     var x = left + (series.length === 1 ? 0 : i * step);
-    var day = svgNode("g", { class: "evo-day", tabindex: "0", "data-tip": formatDay(d.day) + "\\n" + names.works + " : " + d.works + "\\n" + names.offline_only + " : " + d.offline_only + "\\n" + names.fails + " : " + d.fails });
+    var day = svgNode("g", { class: "evo-day", tabindex: "0", "data-tip-tones": ",works,offline_only,fails", "data-tip": formatDay(d.day) + "\\n" + names.works + " : " + d.works + "\\n" + names.offline_only + " : " + d.offline_only + "\\n" + names.fails + " : " + d.fails });
     var from = Math.max(left, x - step / 2), to = Math.min(width - right, x + step / 2);
     day.appendChild(svgNode("rect", { x: from.toFixed(1), y: String(top), width: Math.max(1, to - from).toFixed(1), height: String(height - top - bottom), class: "evo-hit" }));
     ["works", "offline_only", "fails"].forEach(function (key) {
