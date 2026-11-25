@@ -1526,7 +1526,11 @@ function tipShow(target) {
     // A line may take the colour of its answer: data-tip-tones names one tone per line (empty for none), drawn by the classes tone-works, tone-offline_only and tone-fails.
     tipBox.textContent = "";
     text.split("\\n").forEach(function (line, i) {
-      tipBox.appendChild(el("div", { class: tones[i] ? "tone-" + tones[i] : "", text: LANG === "fr" ? trText(line) : line }));
+      var shown = LANG === "fr" ? trText(line) : line;
+      var cut = shown.indexOf(" : ");
+      // Only the name of the answer takes the colour, the figure after it stays plain.
+      if (tones[i] && cut > 0) tipBox.appendChild(el("div", {}, [el("span", { class: "tone-" + tones[i], text: shown.slice(0, cut) }), document.createTextNode(shown.slice(cut))]));
+      else tipBox.appendChild(el("div", { text: shown }));
     });
   } else {
     tipBox.textContent = text.split("\\n").map(function (line) { return LANG === "fr" ? trText(line) : line; }).join("\\n");
@@ -1920,7 +1924,10 @@ function evolutionChart(series) {
   var names = LANG === "fr" ? { works: "Marchent", offline_only: "Marchent hors ligne seulement", fails: "Ne marchent pas" } : { works: "Work", offline_only: "Work offline only", fails: "Do not work" };
   series.forEach(function (d, i) {
     var x = left + (series.length === 1 ? 0 : i * step);
-    var day = svgNode("g", { class: "evo-day", tabindex: "0", "data-tip-tones": ",works,offline_only,fails", "data-tip": formatDay(d.day) + "\\n" + names.works + " : " + d.works + "\\n" + names.offline_only + " : " + d.offline_only + "\\n" + names.fails + " : " + d.fails });
+    // The share is of the games counted that day (the three counts together).
+    var dayTotal = d.works + d.offline_only + d.fails;
+    var countLine = function (name, count, total) { return name + " : " + count + " (" + (total ? Math.round((count / total) * 100) : 0) + (LANG === "fr" ? " %)" : "%)"); };
+    var day = svgNode("g", { class: "evo-day", tabindex: "0", "data-tip-tones": ",works,offline_only,fails", "data-tip": formatDay(d.day) + "\\n" + countLine(names.works, d.works, dayTotal) + "\\n" + countLine(names.offline_only, d.offline_only, dayTotal) + "\\n" + countLine(names.fails, d.fails, dayTotal) });
     var from = Math.max(left, x - step / 2), to = Math.min(width - right, x + step / 2);
     day.appendChild(svgNode("rect", { x: from.toFixed(1), y: String(top), width: Math.max(1, to - from).toFixed(1), height: String(height - top - bottom), class: "evo-hit" }));
     ["works", "offline_only", "fails"].forEach(function (key) {
