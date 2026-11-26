@@ -411,6 +411,7 @@ var FR = {
   "Passthrough": "Passthrough", "Saved": "Enregistré", "Removed": "Retiré", "Deleted": "Supprimé", "Edit": "Modifier", "Delete": "Supprimer", "Remove": "Retirer", "Save": "Enregistrer",
   "Game": "Jeu", "Setting": "Réglage", "Since": "Depuis", "Player": "Joueur", "Day": "Jour", "Answer": "Réponse", "State": "État", "Size": "Taille", "Problems": "Problèmes", "Report": "Rapport",
   "Reopen": "Rouvrir", "Libraries": "Bibliothèques", "Older than 1 week": "Plus d'une semaine", "Older than 2 weeks": "Plus de 2 semaines", "Older than 1 month": "Plus d'un mois", "Any age": "Toutes les dates", "Type": "Type", "All types": "Tous les types", "Reports only": "Rapports seulement", "Libraries only": "Bibliothèques seulement", "Mark selection handled": "Marquer la sélection comme traitée", "Reopen selection": "Rouvrir la sélection", "Already handled": "Déjà traité", "Nothing to reopen": "Rien à rouvrir", "Age": "Ancienneté", "Search a player": "Rechercher un joueur", "Search a device": "Rechercher un appareil", "Select all": "Tout sélectionner", "Select": "Sélectionner", "Download selection": "Télécharger la sélection", "Delete selection": "Supprimer la sélection", "Mark handled": "Marquer comme traité", "Back to waiting": "Remis en attente", "Marked handled": "Marqué comme traité", "Download": "Télécharger", "To handle": "À traiter",
+  "Controllers": "Manettes", "Face buttons A, B, X, Y": "Boutons A, B, X, Y", "D-pad up and down": "Croix haut et bas", "D-pad left and right": "Croix gauche et droite", "Automatic mapping": "Mapping automatique", "Chosen by players": "Choisis par les joueurs", "Partly": "En partie", "Controller feedback": "Retour manettes", "all time": "depuis le début", "Custom mapping": "Mapping personnalisé", "Players whose last answer is each one, for their current mapping. Most confirmed mappings first.": "Joueurs dont la dernière réponse est chacune de celles-ci, pour leur mapping actuel. Mappings les plus confirmés d'abord.",
   "Report sent": "Rapport envoyé", "The relay has the report": "Le relais a le rapport", "Report waiting": "Rapport en attente",
   "Kept on the device: no network, or the relay was busy": "Gardé sur l'appareil : pas de réseau, ou le relais était occupé",
   "Report refused": "Rapport refusé", "The relay would not take the report": "Le relais n'a pas pris le rapport", "No report": "Aucun rapport",
@@ -486,6 +487,11 @@ var FR = {
 // Sentences made of a number and a word, or of fixed words around a name. Each rule is tried on every text, in this order.
 function plFr(n, one, many) { return n + " " + (Number(n) === 1 ? one : many); }
 var FR_RULES = [
+  [/^(\\d+) votes?: the game works, but not the controls$/, function (m, n) { return plFr(n, "vote", "votes") + " : le jeu marche, mais pas les manettes"; }],
+  [/^(Preset (.+)|Custom mapping|Automatic mapping|Face buttons A, B, X, Y|D-pad up and down|D-pad left and right) \u00b7 (\\d+) works, (\\d+) partly, (\\d+) not$/, function (m, w, p, a, b, c) { return ({ "Automatic mapping": "Mapping automatique", "Face buttons A, B, X, Y": "Boutons A, B, X, Y", "D-pad up and down": "Croix haut et bas", "D-pad left and right": "Croix gauche et droite", "Custom mapping": "Mapping personnalisé" }[w] || "Mapping personnalisé") + " \u00b7 " + a + " marchent, " + b + " en partie, " + c + " non"; }],
+  [/^Automatic mapping (\\d+) \u00b7 chosen (\\d+)$/, "Mapping automatique $1 \u00b7 choisi $2"],
+  [/^(players?) on (\\d+) games?$/, function (m, a, b) { return (a === "player" ? "joueur" : "joueurs") + " sur " + b + (b === "1" ? " jeu" : " jeux"); }],
+  [/^Partly (\\d+)$/, "En partie $1"],
   [/\\bMark (\\d+) games as incompatible/g, "Marquer $1 jeux comme incompatibles"],
   [/^New games \\((\\d+) in (?:the month|(\\d+) days)\\)$/, function (m, n, d) { return "Nouveaux jeux (" + n + " en " + (d ? d + " jours" : "1 mois") + ")"; }],
   [/^(\\d+) of (\\d+) players$/, "$1 joueurs sur $2"],
@@ -1342,6 +1348,61 @@ function drawPrice(hero, appid, game) {
   }).catch(function () {});
 }
 
+// What players said about the controllers of the game, for each kind of device: the players whose last answer is works, partly or not (a player counts once, with the current mapping), the
+// votes "the game works, but not the controls" (still a "works" for the game), and the mappings most confirmed. Nothing is drawn when nobody said anything.
+var PRESET_NAMES = { auto: "Automatic mapping", faces: "Face buttons A, B, X, Y", dpad_vertical: "D-pad up and down", dpad_horizontal: "D-pad left and right" };
+var CONTROL_NAMES = { dpad_up: "D-pad up", dpad_down: "D-pad down", dpad_left: "D-pad left", dpad_right: "D-pad right", thumbstick: "stick", squeeze: "grip", trigger: "trigger", menu: "menu", system: "system", view: "view", bumper: "bumper", shoulder: "bumper" };
+function controlName(ref) {
+  var parts = ref.split(":");
+  var group = parts[1] || "";
+  var name = CONTROL_NAMES[group] || (/^[a-z]$/.test(group) ? group.toUpperCase() : group.replace(/_/g, " "));
+  return (parts[0] === "left" ? "L " : "R ") + name;
+}
+/** "left:dpad_down>left:x;..." as "L D-pad down \u2192 L X, ...". */
+function readableMapping(mapping) {
+  return mapping.split(";").map(function (binding) {
+    var sides = binding.split(">");
+    var targets = sides[1] === "none" ? "nothing" : sides[1].split("+").map(controlName).join(" + ");
+    return controlName(sides[0]) + " \u2192 " + targets;
+  }).join(", ");
+}
+
+function drawControllers() {
+  var holder = document.getElementById("controllers-card");
+  var asked = state.current && state.current.appid;
+  if (!holder || !asked) return;
+  call("/console/api/controllers?env=" + state.env + "&appId=" + asked).then(function (data) {
+    if (!state.current || state.current.appid !== asked || !document.getElementById("controllers-card")) return;
+    holder.textContent = "";
+    var cards = [];
+    DEVICES.forEach(function (d) {
+      var own = data.devices[d];
+      if (!own || !(own.works + own.partial + own.fails + own.noControls)) return;
+      var counts = el("div", { class: "counts" });
+      [["works", "Works", own.works], ["offline_only", "Partly", own.partial], ["fails", "Does not work", own.fails]].forEach(function (c) {
+        counts.appendChild(el("span", { class: "count" + (c[2] ? "" : " zero") }, [el("span", { class: "dot d-" + c[0] }), document.createTextNode(c[1] + " " + c[2])]));
+      });
+      var box = el("div", { class: "dev-card" }, [el("h3", { text: d })]);
+      [["Automatic mapping", own.auto], ["Chosen by players", own.chosen]].forEach(function (pair) {
+        box.appendChild(el("div", { class: "issues-label", text: pair[0] }));
+        var row = el("div", { class: "counts" });
+        [["works", "Works", pair[1].works], ["offline_only", "Partly", pair[1].partial], ["fails", "Does not work", pair[1].fails]].forEach(function (c) {
+          row.appendChild(el("span", { class: "count" + (c[2] ? "" : " zero") }, [el("span", { class: "dot d-" + c[0] }), document.createTextNode(c[1] + " " + c[2])]));
+        });
+        box.appendChild(row);
+      });
+      if (own.noControls) box.appendChild(el("p", { class: "muted", text: own.noControls + (own.noControls === 1 ? " vote: the game works, but not the controls" : " votes: the game works, but not the controls") }));
+      own.mappings.forEach(function (m) {
+        box.appendChild(el("div", { class: "issues-label", text: (PRESET_NAMES[m.preset] || "Custom mapping") + " \u00b7 " + m.works + " works, " + m.partial + " partly, " + m.fails + " not" }));
+        box.appendChild(el("div", { class: "muted", text: readableMapping(m.mapping) }));
+      });
+      cards.push(box);
+    });
+    if (!cards.length) return;
+    holder.appendChild(card("Controllers", [el("p", { class: "muted", text: "Players whose last answer is each one, for their current mapping. Most confirmed mappings first." }), el("div", { class: "overview" }, cards)]));
+  }).catch(function () {});
+}
+
 function loadVotes() {
   call("/console/api/votes?env=" + state.env + "&appId=" + state.current.appid).then(function (data) {
     state.votes = data.votes;
@@ -1983,6 +2044,7 @@ function showHome() {
         hero.appendChild(el("div", { class: "stat" }, [el("small", { text: t[0] }), el("span", { class: "stat-span", text: span }), el("b", { text: String(t[1][0]) }), deltaNote(t[1][0], t[1][1], "vs " + before)]));
       });
       hero.appendChild(el("div", { class: "stat" }, [el("small", { text: "Reports to handle" }), el("span", { class: "stat-span", text: "now" }), el("b", { text: String(data.waiting) }), el("span", { class: "muted", text: rows[2][1](periodPick)[0] + " received in the " + (periodPick === 31 ? "month" : periodPick + " days") })]));
+      if (data.controllers && data.controllers.players) hero.appendChild(el("div", { class: "stat" }, [el("small", { text: "Controller feedback" }), el("span", { class: "stat-span", text: "all time" }), el("b", { text: String(data.controllers.players) }), el("div", { class: "muted", text: (data.controllers.players === 1 ? "player" : "players") + " on " + data.controllers.games + (data.controllers.games === 1 ? " game" : " games") }), el("div", { class: "muted", text: "Automatic mapping " + data.controllers.auto + " \u00b7 chosen " + data.controllers.chosen })]));
       if (heroVersions.length && heroTotal) hero.appendChild(el("div", { class: "stat" }, [el("small", { text: "On the newest version" }), el("span", { class: "stat-span", text: "last 31 days" }), el("b", { text: Math.round((heroVersions[0].players * 100) / heroTotal) + " %" }), el("span", { class: "muted", text: heroVersions[0].players + " of " + heroTotal + " players on " + heroVersions[0].app })]));
     };
     var pick = el("div", { class: "seg-fine", role: "group", "aria-label": "Period" });
@@ -2688,6 +2750,8 @@ function drawDetail() {
   });
   if (!overview.childNodes.length) overview.appendChild(el("span", { class: "chip", text: "No vote counted" }));
   panel.appendChild(overview);
+  panel.appendChild(el("div", { id: "controllers-card" }));
+  drawControllers();
 
   panel.appendChild(el("div", { id: "incompat" }));
   drawIncompatible();

@@ -1511,3 +1511,107 @@ describe("the hour of an answer in the console", () => {
     assert.equal(row.trail[1].votedAt, "2026-11-03T21:00:00Z");
   });
 });
+
+describe("the feedback on the controllers in the console", () => {
+  const MAPPING = "left:dpad_down>left:x;right:a>right:a";
+  const OTHER = "left:dpad_down>left:y;right:a>right:a";
+  const feedback = (appId, voter, answer, extra = {}) => db.prepare(`INSERT INTO ${extra.table ?? "controller_feedback"} (app_id, voter, device, mapping, preset, answer, app, updated) VALUES (?, ?, ?, ?, ?, ?, '0.9.4', '2026-11-26T10:00:00Z')`)
+    .run(appId, voter, extra.device ?? "quest", extra.mapping ?? MAPPING, extra.preset ?? null, answer);
+  const controllers = async (query = "env=prod&appId=5") => (await ask(`/console/api/controllers?${query}`)).json();
+
+  it("counts, for each family of device, the players whose last answer is works, partly or not, and the mappings most confirmed", async () => {
+    feedback(5, "aaaaaaaaaaaa", "works", { preset: "faces" });
+    feedback(5, "bbbbbbbbbbbb", "works", { preset: "faces" });
+    feedback(5, "cccccccccccc", "partial", { preset: "faces" });
+    feedback(5, "dddddddddddd", "works", { mapping: OTHER });
+    feedback(5, "eeeeeeeeeeee", "fails", { mapping: "left:a>none" });
+    feedback(5, "aaaaaaaaaaaa", "fails", { device: "pico" });
+    feedback(6, "aaaaaaaaaaaa", "works");
+    const { devices } = await controllers();
+    assert.deepEqual(devices.quest, {
+      works: 3, partial: 1, fails: 1, auto: { works: 0, partial: 0, fails: 0 }, chosen: { works: 3, partial: 1, fails: 1 }, noControls: 0,
+      mappings: [{ mapping: MAPPING, preset: "faces", works: 2, partial: 1, fails: 0 }, { mapping: OTHER, preset: null, works: 1, partial: 0, fails: 0 }],
+    });
+    assert.deepEqual(devices.pico, { works: 0, partial: 0, fails: 1, auto: { works: 0, partial: 0, fails: 0 }, chosen: { works: 0, partial: 0, fails: 1 }, noControls: 0, mappings: [] });
+    assert.equal("phone" in devices, false);
+  });
+
+  it("counts apart the answers on the automatic mapping and the ones on a mapping the players chose, and gives the home both numbers of players", async () => {
+    feedback(5, "aaaaaaaaaaaa", "works", { preset: "auto", mapping: OTHER });
+    feedback(5, "bbbbbbbbbbbb", "fails", { preset: "auto", mapping: OTHER });
+    feedback(5, "cccccccccccc", "partial", { preset: "auto", mapping: OTHER });
+    feedback(5, "dddddddddddd", "works", { preset: "faces" });
+    feedback(5, "eeeeeeeeeeee", "works");
+    feedback(5, "aaaaaaaaaaaa", "works", { device: "pico" });
+    feedback(7, "ffffffffffff", "works", { table: "controller_feedback_test", preset: "auto" });
+    const { devices } = await controllers();
+    assert.deepEqual(devices.quest.auto, { works: 1, partial: 1, fails: 1 });
+    assert.deepEqual(devices.quest.chosen, { works: 2, partial: 0, fails: 0 });
+    assert.deepEqual({ works: devices.quest.works, partial: devices.quest.partial, fails: devices.quest.fails }, { works: 3, partial: 1, fails: 1 });
+    assert.deepEqual(devices.pico.chosen, { works: 1, partial: 0, fails: 0 });
+    // aaaa answered on the automatic mapping (Quest) and on a chosen one (Pico): counted in both.
+    assert.deepEqual((await (await ask("/console/api/home?env=prod")).json()).controllers, { games: 1, players: 5, auto: 3, chosen: 3 });
+    assert.deepEqual((await (await ask("/console/api/home?env=test")).json()).controllers, { games: 1, players: 1, auto: 1, chosen: 0 });
+  });
+
+  it("counts apart the votes that say the game works but not the controls, which stay works for the game", async () => {
+    vote(5, "aaaaaaaaaaaa", { verdict: "works", issues: "no_controls" });
+    vote(5, "bbbbbbbbbbbb", { verdict: "works" });
+    vote(5, "cccccccccccc", { verdict: "works", issues: "no_controls", device: "pico" });
+    // An old "does not work" that ticked only the controls stays "does not work" and is not counted here.
+    vote(5, "dddddddddddd", { verdict: "fails", issues: "no_controls" });
+    const { devices } = await controllers();
+    assert.equal(devices.quest.noControls, 1);
+    assert.equal(devices.pico.noControls, 1);
+    const [game] = await summary();
+    assert.deepEqual({ works: game.works, fails: game.fails }, { works: 3, fails: 1 });
+    // A vote marked as fixed counts as "works" with no problem.
+    db.prepare("UPDATE vote_history SET fixed = '2026-11-01' WHERE voter = 'aaaaaaaaaaaa'").run();
+    assert.equal((await controllers()).devices.quest, undefined);
+  });
+
+  it("reads the real set and the test set apart, and refuses a set or a game it does not know", async () => {
+    feedback(5, "aaaaaaaaaaaa", "works");
+    feedback(5, "bbbbbbbbbbbb", "fails", { table: "controller_feedback_test" });
+    assert.equal((await controllers()).devices.quest.works, 1);
+    assert.deepEqual((await controllers("env=test&appId=5")).devices.quest, { works: 0, partial: 0, fails: 1, auto: { works: 0, partial: 0, fails: 0 }, chosen: { works: 0, partial: 0, fails: 1 }, noControls: 0, mappings: [] });
+    assert.equal((await ask("/console/api/controllers?env=other&appId=5")).status, 400);
+    assert.equal((await ask("/console/api/controllers?env=prod&appId=0")).status, 400);
+    assert.equal((await ask("/console/api/controllers?env=prod&appId=5", { jwt: "" })).status, 404);
+  });
+
+  it("gives no feedback on a database that has not had the migration, and no player in what it gives", async () => {
+    feedback(5, "aaaaaaaaaaaa", "works");
+    const text = JSON.stringify(await controllers());
+    assert.ok(!text.includes("aaaaaaaaaaaa"));
+    db.exec("DROP TABLE controller_feedback");
+    assert.deepEqual(await controllers(), { devices: {} });
+    assert.deepEqual((await (await ask("/console/api/home?env=prod")).json()).controllers, { games: 0, players: 0, auto: 0, chosen: 0 });
+  });
+
+  it("gives the home the games that have feedback and the players who answered", async () => {
+    feedback(5, "aaaaaaaaaaaa", "works");
+    feedback(5, "bbbbbbbbbbbb", "fails");
+    feedback(6, "aaaaaaaaaaaa", "works");
+    feedback(6, "aaaaaaaaaaaa", "works", { device: "pico" });
+    feedback(7, "cccccccccccc", "works", { table: "controller_feedback_test" });
+    assert.deepEqual((await (await ask("/console/api/home?env=prod")).json()).controllers, { games: 2, players: 2, auto: 0, chosen: 2 });
+    assert.deepEqual((await (await ask("/console/api/home?env=test")).json()).controllers, { games: 1, players: 1, auto: 0, chosen: 1 });
+  });
+
+  it("keeps no_controls on an answer that works when the developer changes or adds it, and drops the other codes", async () => {
+    vote(5, "aaaaaaaaaaaa", { verdict: "fails", issues: "no_controls,slow" });
+    await ask("/console/api/change", { method: "POST", body: { env: "prod", appId: 5, voter: "aaaaaaaaaaaa", verdict: "works" } });
+    assert.equal(db.prepare("SELECT issues FROM vote_history").get().issues, "no_controls");
+    vote(6, "bbbbbbbbbbbb", { verdict: "fails", issues: "slow" });
+    await ask("/console/api/change", { method: "POST", body: { env: "prod", appId: 6, voter: "bbbbbbbbbbbb", verdict: "works" } });
+    assert.equal(db.prepare("SELECT issues FROM vote_history WHERE app_id = 6").get().issues, null);
+    await ask("/console/api/add", { method: "POST", body: { env: "test", appId: 7, verdict: "works", device: "quest", issues: ["no_controls", "slow"] } });
+    assert.equal(db.prepare("SELECT issues FROM vote_history_test").get().issues, "no_controls");
+  });
+
+  it("shows the page its card of controllers", async () => {
+    const html = await (await ask("/console")).text();
+    assert.ok(html.includes("/console/api/controllers?env="));
+  });
+});

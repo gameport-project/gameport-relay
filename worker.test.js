@@ -801,6 +801,24 @@ describe("the messages to the developer's private channel", () => {
     assert.equal(sent[0].body.embeds[0].fields.find((f) => f.name === "Player's answer").value, "Works");
   });
 
+  it("tells a report of a game that works without its controls as such, and an earlier answer of that kind in 'Before' the same way", async () => {
+    sent.length = 0;
+    assert.equal((await run(report({ answer: "works", noControls: "1" }))).status, 204);
+    assert.equal(sent[0].body.embeds[0].fields.find((f) => f.name === "Player's answer").value, "Works, but not the controls");
+    // The flag means nothing for another answer: a game that fails with it stays "Does not work", a plain "works" stays "Works".
+    sent.length = 0;
+    await run(report({ answer: "fails", noControls: "1" }));
+    assert.equal(sent[0].body.embeds[0].fields.find((f) => f.name === "Player's answer").value, "Does not work");
+    sent.length = 0;
+    await run(report({ answer: "works" }));
+    assert.equal(sent[0].body.embeds[0].fields.find((f) => f.name === "Player's answer").value, "Works");
+    // An answer "works, but not the controls" followed by "does not work": the channel's "Before" says what it was.
+    await run(post(goodMessage({ appId: 846470, verdict: "works", issues: ["no_controls"] })));
+    sent.length = 0;
+    await run(post(goodMessage({ appId: 846470, verdict: "fails" })));
+    assert.match(sent.at(-1).body.embeds[0].fields.find((f) => f.name === "Before").value, /^Works, but not the controls \(/);
+  });
+
   it("names a player of the test set from the test names only, and still tells the code when the table of names is not there yet", async () => {
     const TEST_HOOK = "https://discord.com/api/webhooks/987654321/test-token_XYZ";
     env.DISCORD_TEST_WEBHOOK = TEST_HOOK;
@@ -824,6 +842,14 @@ describe("the messages to the developer's private channel", () => {
     sent.length = 0;
     await run(post(goodMessage({ appId: 846470, verdict: "works", device: "pico" })));
     assert.equal(sent.at(-1).body.embeds[0].fields.find((f) => f.name === "Device").value, "Pico");
+  });
+
+  it("tells a game that works without its controls as such, not as plain 'Works'", async () => {
+    assert.equal((await run(post(goodMessage({ appId: 846470, verdict: "works", issues: ["no_controls"] })))).status, 204);
+    assert.equal(sent.at(-1).body.embeds[0].fields.find((f) => f.name === "Answer").value, "Works, but not the controls");
+    sent.length = 0;
+    assert.equal((await run(post(goodMessage({ appId: 846470, verdict: "works" })))).status, 204);
+    assert.equal(sent.at(-1).body.embeds[0].fields.find((f) => f.name === "Answer").value, "Works");
   });
 
   it("names a game from the catalog when Steam's store has nothing for it, as the console does, and keeps the number for a game nobody knows", async () => {
@@ -1508,5 +1534,232 @@ describe("the history of the answers", () => {
     assert.equal((await vote(env, { verdict: "fails" })).status, 204);
     assert.equal((await vote(env, { verdict: "works" })).status, 204);
     assert.deepEqual(old.prepare("SELECT verdict FROM votes").all().map((row) => row.verdict), ["works"]);
+  });
+});
+
+describe("the feedback on the controllers", () => {
+  let db;
+  let env;
+  const MAPPING = "left:dpad_down>left:x;left:dpad_up>left:y;right:a>right:a";
+  const OTHER_MAPPING = "left:dpad_down>left:y;right:a>right:a+right:b;right:b>none";
+  const message = (extra = {}) => ({ v: 1, appId: 1125240, device: "quest", voter: VOTER, app: "0.9.4", answer: "works", mapping: MAPPING, ...extra });
+  const send = (body, path = "/controllers") => worker.fetch(post(body, path), env);
+  const read = async (appId = 1125240, device = "quest", path = "/controllers") => (await worker.fetch(get(`${path}/${appId}?device=${device}`), env)).json();
+  const lines = (table = "controller_feedback") => db.prepare(`SELECT * FROM ${table} ORDER BY id`).all().map((row) => ({ ...row }));
+
+  beforeEach(() => {
+    db = new DatabaseSync(":memory:");
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    env = { DB: d1(db), VOTER_SALT: "salt" };
+  });
+
+  it("accepts a good message, keeps the known fields and the hash of the player, and answers ok", async () => {
+    const answer = await send(message({ preset: "faces" }));
+    assert.equal(answer.status, 200);
+    assert.deepEqual(await answer.json(), { ok: true });
+    const [line] = lines();
+    assert.equal(line.voter, await voterHash(VOTER, "salt"));
+    assert.notEqual(line.voter, VOTER);
+    assert.deepEqual({ appId: line.app_id, device: line.device, mapping: line.mapping, preset: line.preset, answer: line.answer, app: line.app }, { appId: 1125240, device: "quest", mapping: MAPPING, preset: "faces", answer: "works", app: "0.9.4" });
+    assert.match(line.updated, /^\d{4}-\d\d-\d\dT\d\d:00:00Z$/);
+    assert.equal(lines("controller_feedback_history").length, 1);
+  });
+
+  it("refuses a field it does not know, a malformed one and one that is too large, and keeps nothing", async () => {
+    const bad = [
+      message({ extra: 1 }), message({ discord: "x" }), message({ v: 2 }), message({ v: undefined }),
+      message({ appId: 0 }), message({ appId: "1125240" }), message({ appId: 3_000_000_000 }),
+      message({ device: "toaster" }), message({ device: undefined }),
+      message({ voter: "short" }), message({ voter: VOTER.toUpperCase() }),
+      message({ app: "0.9" }), message({ app: undefined }),
+      message({ answer: "maybe" }), message({ answer: undefined }), message({ answer: "offline_only" }),
+      message({ preset: "other" }), message({ preset: null }), message({ preset: "AUTO" }),
+      message({ mapping: undefined }), message({ mapping: "" }), message({ mapping: 12 }),
+      message({ mapping: "left:a>left:b;" }), message({ mapping: ";left:a>left:b" }), message({ mapping: "left:a>" }), message({ mapping: ">left:b" }),
+      message({ mapping: "middle:a>left:b" }), message({ mapping: "left:A>left:b" }), message({ mapping: "left:a>left:b>left:c" }), message({ mapping: "left:a>left:b+left:c+left:d+left:e+left:f" }),
+      message({ mapping: "left:a>left:b; right:a>right:b" }), message({ mapping: "left:a>None" }), message({ mapping: `left:${"a".repeat(21)}>left:b` }),
+      message({ mapping: Array.from({ length: 61 }, () => "left:a>none").join(";") }),
+      message({ mapping: `left:a>left:b${";left:a>left:b".repeat(60)}` }),
+      message({ mapping: Array.from({ length: 30 }, () => "left:abcdefghijklmnopqrst>right:abcdefghijklmnopqrst").join(";") }),
+      null, [], "text", 7,
+    ];
+    for (const body of bad) assert.equal((await send(body)).status, 400, `should refuse ${JSON.stringify(body)?.slice(0, 80)}`);
+    assert.equal((await send("not json")).status, 400);
+    assert.equal(lines().length, 0);
+    assert.equal(lines("controller_feedback_history").length, 0);
+  });
+
+  it("takes the preset auto (GamePort's own split), and shows a named preset before auto for the same mapping", async () => {
+    assert.equal((await send(message({ preset: "auto" }))).status, 200);
+    assert.deepEqual((await read()).mappings, [{ mapping: MAPPING, preset: "auto", works: 1, partial: 0, fails: 0 }]);
+    await send(message({ voter: OTHER, preset: "faces" }));
+    await send(message({ voter: "2".repeat(32) }));
+    assert.deepEqual((await read()).mappings, [{ mapping: MAPPING, preset: "faces", works: 3, partial: 0, fails: 0 }]);
+    db.prepare("UPDATE controller_feedback SET preset = NULL WHERE preset = 'faces'").run();
+    assert.equal((await read()).mappings[0].preset, "auto");
+    db.prepare("UPDATE controller_feedback SET preset = NULL").run();
+    assert.equal((await read()).mappings[0].preset, null);
+  });
+
+  it("takes a long mapping (the 700 characters bind before the 60 bindings do) and one that sends a command nowhere or to two buttons", async () => {
+    const long = Array.from({ length: 40 }, (_, i) => `left:c${String.fromCharCode(97 + (i % 26))}${String.fromCharCode(97 + Math.floor(i / 26))}>none`).join(";");
+    assert.ok(long.length <= 700);
+    assert.equal((await send(message({ mapping: long }))).status, 200);
+    assert.equal((await send(message({ voter: OTHER, mapping: OTHER_MAPPING }))).status, 200);
+  });
+
+  it("refuses a body of more than 2048 bytes before reading it", async () => {
+    assert.equal((await send(message({ padding: "x".repeat(2100) }))).status, 413);
+    assert.equal(lines().length, 0);
+  });
+
+  it("takes only POST on the send route and only GET on the read route", async () => {
+    assert.equal((await worker.fetch(get("/controllers"), env)).status, 405);
+    assert.equal((await worker.fetch(post(message(), "/controllers/1125240"), env)).status, 405);
+    assert.equal((await worker.fetch(get("/controllers/abc?device=quest"), env)).status, 404);
+  });
+
+  it("keeps one current line for each game, player and family of device: the last send replaces the one before", async () => {
+    await send(message({ answer: "fails" }));
+    await send(message({ answer: "works", mapping: OTHER_MAPPING, preset: "dpad_vertical" }));
+    const [line, ...rest] = lines();
+    assert.equal(rest.length, 0);
+    assert.deepEqual({ answer: line.answer, mapping: line.mapping, preset: line.preset }, { answer: "works", mapping: OTHER_MAPPING, preset: "dpad_vertical" });
+    // A send with no preset clears it: the mapping is no longer one.
+    await send(message({ answer: "partial" }));
+    assert.equal(lines()[0].preset, null);
+    assert.equal(lines()[0].answer, "partial");
+  });
+
+  it("keeps every send in the history, nothing is lost", async () => {
+    await send(message({ answer: "fails" }));
+    await send(message({ answer: "works" }));
+    await send(message({ answer: "works", mapping: OTHER_MAPPING }));
+    assert.deepEqual(lines("controller_feedback_history").map((line) => [line.answer, line.mapping]), [["fails", MAPPING], ["works", MAPPING], ["works", OTHER_MAPPING]]);
+    assert.ok(lines("controller_feedback_history").every((line) => /^\d{4}-\d\d-\d\dT\d\d:00:00Z$/.test(line.created)));
+  });
+
+  it("separates the families of device: a Quest and a Pico of the same player are two lines", async () => {
+    await send(message({ device: "quest", answer: "works" }));
+    await send(message({ device: "pico", answer: "fails" }));
+    assert.equal(lines().length, 2);
+    assert.equal((await read(1125240, "quest")).mappings.length, 1);
+    assert.deepEqual((await read(1125240, "pico")).mappings, []);
+  });
+
+  it("lists the mappings that work, grouped: how many players said works, partly or not for each, the most confirmed first", async () => {
+    const players = ["1", "2", "3", "4", "5", "6"].map((c) => c.repeat(32));
+    await send(message({ voter: players[0], answer: "works", preset: "faces" }));
+    await send(message({ voter: players[1], answer: "works", preset: "faces" }));
+    await send(message({ voter: players[2], answer: "fails", preset: "faces" }));
+    await send(message({ voter: players[3], answer: "partial", preset: "faces" }));
+    await send(message({ voter: players[4], answer: "works", mapping: OTHER_MAPPING }));
+    // A mapping nobody found working is not listed.
+    await send(message({ voter: players[5], answer: "partial", mapping: "right:b>right:a" }));
+    const body = await read();
+    assert.deepEqual(body, { v: 1, mappings: [{ mapping: MAPPING, preset: "faces", works: 2, partial: 1, fails: 1 }, { mapping: OTHER_MAPPING, preset: null, works: 1, partial: 0, fails: 0 }] });
+  });
+
+  it("counts a player who changed their mapping only for the current one", async () => {
+    await send(message({ answer: "works" }));
+    await send(message({ answer: "works", mapping: OTHER_MAPPING }));
+    assert.deepEqual((await read()).mappings, [{ mapping: OTHER_MAPPING, preset: null, works: 1, partial: 0, fails: 0 }]);
+  });
+
+  it("gives at most ten mappings, the most confirmed first, and says nothing about any player", async () => {
+    for (let i = 0; i < 12; i++) await send(message({ voter: String(i.toString(16)).padStart(32, "0"), mapping: `left:a>left:${String.fromCharCode(97 + i)}` }));
+    // The twelfth mapping has two players, so it leads the list.
+    await send(message({ voter: "f".repeat(32), mapping: `left:a>left:${String.fromCharCode(97 + 11)}` }));
+    const answer = await worker.fetch(get("/controllers/1125240?device=quest"), env);
+    assert.equal(answer.headers.get("cache-control"), "public, max-age=60");
+    const text = await answer.text();
+    const body = JSON.parse(text);
+    assert.equal(body.mappings.length, 10);
+    assert.equal(body.mappings[0].works, 2);
+    assert.ok(!/voter|hash|app\b/.test(text));
+    for (const known of [VOTER, await voterHash(VOTER, "salt")]) assert.ok(!text.includes(known));
+    assert.deepEqual(Object.keys(body.mappings[0]), ["mapping", "preset", "works", "partial", "fails"]);
+  });
+
+  it("refuses a read for a family of device it does not know, or none", async () => {
+    assert.equal((await worker.fetch(get("/controllers/1125240?device=toaster"), env)).status, 400);
+    assert.equal((await worker.fetch(get("/controllers/1125240"), env)).status, 400);
+  });
+
+  it("keeps the test set apart from the real one", async () => {
+    assert.equal((await send(message(), "/test/controllers")).status, 200);
+    assert.equal(lines().length, 0);
+    assert.equal(lines("controller_feedback_test").length, 1);
+    assert.equal(lines("controller_feedback_history_test").length, 1);
+    assert.equal(lines("controller_feedback_history").length, 0);
+    assert.deepEqual((await read()).mappings, []);
+    assert.equal((await read(1125240, "quest", "/test/controllers")).mappings.length, 1);
+  });
+
+  it("limits the sends of one address, as it does the votes", async () => {
+    env.LIMITER = { limit: async () => ({ success: false }) };
+    assert.equal((await send(message())).status, 429);
+    assert.equal(lines().length, 0);
+  });
+
+  it("answers 500 when the database cannot keep it, and when it cannot be read", async () => {
+    const empty = { DB: d1(new DatabaseSync(":memory:")), VOTER_SALT: "salt" };
+    assert.equal((await worker.fetch(post(message(), "/controllers"), empty)).status, 500);
+    assert.equal((await worker.fetch(get("/controllers/1125240?device=quest"), empty)).status, 500);
+  });
+
+  it("is safe to run the migration again, and the schema holds the same tables", () => {
+    const migration = readFileSync(new URL("./migrations/0029_controller_feedback.sql", import.meta.url), "utf8");
+    db.exec(migration);
+    db.exec(migration);
+    const fresh = new DatabaseSync(":memory:");
+    fresh.exec(migration);
+    const names = (d) => d.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'controller_feedback%' ORDER BY name").all().map((row) => row.name);
+    assert.deepEqual(names(fresh), names(db));
+    assert.equal(names(fresh).filter((name) => !name.includes("_game")).length, 4);
+    assert.throws(() => db.prepare("INSERT INTO controller_feedback (app_id, voter, device, mapping, answer, app, updated) VALUES (1, 'a', 'quest', 'x', 'maybe', '0.9.4', 't')").run());
+  });
+});
+
+describe("the answer works, but not the controls", () => {
+  let db;
+  let env;
+  const summary = async () => (await (await worker.fetch(get(), env)).json()).games;
+  const voteWith = (voter, extra) => worker.fetch(post(goodMessage({ voter, ...extra })), env);
+
+  beforeEach(() => {
+    db = new DatabaseSync(":memory:");
+    db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    env = { DB: d1(db), VOTER_SALT: "salt" };
+  });
+
+  it("keeps no_controls, and only that code, on an answer that works", () => {
+    assert.deepEqual(validate(goodMessage({ verdict: "works", issues: ["no_controls"] })).vote.issues, ["no_controls"]);
+    assert.deepEqual(validate(goodMessage({ verdict: "works", issues: ["no_sound", "no_controls", "slow"] })).vote.issues, ["no_controls"]);
+    assert.deepEqual(validate(goodMessage({ verdict: "works", issues: ["no_sound", "slow"] })).vote.issues, []);
+    assert.deepEqual(validate(goodMessage({ verdict: "works" })).vote.issues, []);
+    // The other verdicts are as before.
+    assert.deepEqual(validate(goodMessage({ verdict: "fails", issues: ["no_controls", "slow"] })).vote.issues, ["no_controls", "slow"]);
+    assert.ok(validate(goodMessage({ verdict: "works", issues: "no_controls" })).error);
+  });
+
+  it("stays a works for the game: the summary counts it as works, and leaves the problems list as it was", async () => {
+    await voteWith(VOTER, { verdict: "works", issues: ["no_controls"] });
+    await voteWith(OTHER, { verdict: "works" });
+    const [game] = await summary();
+    assert.equal(game.works, 2);
+    assert.equal(game.fails, 0);
+    assert.equal("issues" in game, false);
+    assert.equal("issues" in game.devices.quest, false);
+    assert.equal(db.prepare("SELECT issues FROM votes WHERE voter <> ?").all(await voterHash(OTHER, "salt")).length, 1);
+    assert.equal(db.prepare("SELECT issues FROM votes WHERE voter = ?").get(await voterHash(VOTER, "salt")).issues, "no_controls");
+  });
+
+  it("does not reinterpret an old answer that fails with the one code: it stays fails and keeps counting as a problem", async () => {
+    await voteWith(VOTER, { verdict: "fails", issues: ["no_controls"] });
+    const [game] = await summary();
+    assert.equal(game.fails, 1);
+    assert.equal(game.works, 0);
+    assert.deepEqual(game.issues, { no_controls: 1 });
   });
 });

@@ -225,3 +225,53 @@ CREATE TABLE IF NOT EXISTS library_parts_test (
   data      TEXT    NOT NULL,
   PRIMARY KEY (report_id, seq)
 );
+
+-- The feedback of players on the controllers of a game (migration 0029): the current line of each player, game and family of device (the last send replaces the one before), and every send in the history.
+CREATE TABLE IF NOT EXISTS controller_feedback (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  app_id  INTEGER NOT NULL,
+  voter   TEXT    NOT NULL,  -- a short salted hash, never the id the app keeps
+  device  TEXT    NOT NULL,  -- quest, pico, phone, tablet or other
+  mapping TEXT    NOT NULL,  -- the effective split of the game's commands over the device's buttons, in the form the app writes (see README.md)
+  preset  TEXT,              -- faces, dpad_vertical or dpad_horizontal when the mapping is a preset; empty otherwise
+  answer  TEXT    NOT NULL CHECK (answer IN ('works', 'partial', 'fails')),
+  app     TEXT    NOT NULL,  -- the version of GamePort
+  updated TEXT    NOT NULL,  -- when the relay saved it, UTC, rounded down to the hour (YYYY-MM-DDTHH:00:00Z)
+  UNIQUE (app_id, voter, device)
+);
+CREATE TABLE IF NOT EXISTS controller_feedback_test (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  app_id  INTEGER NOT NULL,
+  voter   TEXT    NOT NULL,
+  device  TEXT    NOT NULL,
+  mapping TEXT    NOT NULL,
+  preset  TEXT,
+  answer  TEXT    NOT NULL CHECK (answer IN ('works', 'partial', 'fails')),
+  app     TEXT    NOT NULL,
+  updated TEXT    NOT NULL,
+  UNIQUE (app_id, voter, device)
+);
+CREATE TABLE IF NOT EXISTS controller_feedback_history (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  app_id  INTEGER NOT NULL,
+  voter   TEXT    NOT NULL,
+  device  TEXT    NOT NULL,
+  mapping TEXT    NOT NULL,
+  preset  TEXT,
+  answer  TEXT    NOT NULL CHECK (answer IN ('works', 'partial', 'fails')),
+  app     TEXT    NOT NULL,
+  created TEXT    NOT NULL
+);
+CREATE TABLE IF NOT EXISTS controller_feedback_history_test (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  app_id  INTEGER NOT NULL,
+  voter   TEXT    NOT NULL,
+  device  TEXT    NOT NULL,
+  mapping TEXT    NOT NULL,
+  preset  TEXT,
+  answer  TEXT    NOT NULL CHECK (answer IN ('works', 'partial', 'fails')),
+  app     TEXT    NOT NULL,
+  created TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS controller_feedback_game ON controller_feedback (app_id, device);
+CREATE INDEX IF NOT EXISTS controller_feedback_test_game ON controller_feedback_test (app_id, device);

@@ -19,6 +19,8 @@ export const REPORT_STATES = new Set(["sent", "waiting", "refused", "none"]);
 export const GAME_SETTINGS = { passthrough: new Set(["on"]) };
 const DEVICES = new Set(["quest", "pico", "phone", "tablet", "other"]);
 export { ISSUES };
+/** The one code of incident an answer "works" may carry: the game works, but the controls do not. */
+export const WORKS_CODE = "no_controls";
 const MAX_BODY_BYTES = 1024;
 // A report is a zip of text. A row of the database holds 2 MB at most and the zip is stored as base64 (a third larger), so a zip of more than CHUNK_BYTES is cut into parts,
 // each in a row of its own: the largest report accepted still fits.
@@ -67,8 +69,9 @@ export function validate(message) {
   if (typeof message.discord === "string") vote.discord = cleanDiscordName(message.discord) ?? "";
   // "Worked offline" only means something for a game that worked: a vote that says it did not work never carries it.
   vote.offline = message.offline === true && message.verdict === "works";
-  // What went wrong only means something for an answer that says something did; a code this version does not know (a newer app) is left out, not refused.
-  vote.issues = message.verdict === "works" ? [] : ISSUES.filter((code) => (message.issues ?? []).includes(code));
+  // What went wrong only means something for an answer that says something did; a code this version does not know (a newer app) is left out, not refused. One code goes with "works"
+  // too: "no_controls" (the game works, the controls do not), counted apart and never against the game; every other code is dropped from such an answer.
+  vote.issues = message.verdict === "works" ? (message.issues ?? []).includes(WORKS_CODE) ? [WORKS_CODE] : [] : ISSUES.filter((code) => (message.issues ?? []).includes(code));
   // What became of the technical report the app sent just before this answer: only for an answer that says something went wrong, and a state this version does not know is left out.
   if (message.verdict !== "works" && REPORT_STATES.has(message.report)) vote.report = message.report;
   // How steadily the game ran, when the player agreed to send it: three whole numbers that make sense together, else left out (never a reason to lose the vote).
@@ -112,6 +115,38 @@ export async function voterHash(voter, salt) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 12);
 }
 
+// The feedback on the controllers (see migration 0029): how a player's mapping of the game's controls onto the device's buttons went, for one game and one family of device.
+export const CONTROLLER_ANSWERS = new Set(["works", "partial", "fails"]);
+// "auto" is GamePort's own split, with no choice of the player: it is judged too, to tell whether it is right. The other three are the presets a player picks.
+export const CONTROLLER_PRESETS = new Set(["auto", "faces", "dpad_vertical", "dpad_horizontal"]);
+const MAX_CONTROLLER_BODY_BYTES = 2048;
+const MAX_MAPPING_CHARS = 700;
+const MAX_MAPPING_BINDINGS = 60;
+const CONTROLLER_FIELDS = new Set(["v", "appId", "device", "voter", "app", "answer", "mapping", "preset"]);
+// A mapping is the effective split of the game's commands over the device's buttons: `source>target[+target…]` (up to four targets) bindings joined by `;`, a command written `hand:group`, and `none` for a command that goes nowhere.
+// Only the shape is checked here, never what it means.
+const COMMAND = "(?:left|right):[a-z_]{1,20}";
+const MAPPING = new RegExp(`^${COMMAND}>(?:none|${COMMAND}(?:\\+${COMMAND}){0,3})(?:;${COMMAND}>(?:none|${COMMAND}(?:\\+${COMMAND}){0,3}))*$`);
+/** How many mappings the public list of a game holds at most. */
+export const MAX_CONTROLLER_MAPPINGS = 10;
+
+/** Checks a feedback on the controllers. Returns {feedback} with the known fields only, or {error}. Anything unknown, malformed or too large is refused, never repaired. */
+export function validateController(message) {
+  if (message === null || typeof message !== "object" || Array.isArray(message)) return { error: "not an object" };
+  if (Object.keys(message).some((key) => !CONTROLLER_FIELDS.has(key))) return { error: "unknown field" };
+  if (message.v !== 1) return { error: "unknown version" };
+  if (!Number.isInteger(message.appId) || message.appId < 1 || message.appId > MAX_APP_ID) return { error: "bad appId" };
+  if (!DEVICES.has(message.device)) return { error: "bad device" };
+  if (typeof message.voter !== "string" || !/^[0-9a-f]{32}$/.test(message.voter)) return { error: "bad voter" };
+  if (typeof message.app !== "string" || !APP_VERSION.test(message.app)) return { error: "bad app version" };
+  if (!CONTROLLER_ANSWERS.has(message.answer)) return { error: "bad answer" };
+  if (typeof message.mapping !== "string" || message.mapping.length > MAX_MAPPING_CHARS || !MAPPING.test(message.mapping) || message.mapping.split(";").length > MAX_MAPPING_BINDINGS) return { error: "bad mapping" };
+  if (message.preset !== undefined && !CONTROLLER_PRESETS.has(message.preset)) return { error: "bad preset" };
+  const feedback = { appId: message.appId, device: message.device, voter: message.voter, app: message.app, answer: message.answer, mapping: message.mapping };
+  if (message.preset !== undefined) feedback.preset = message.preset;
+  return { feedback };
+}
+
 /** Checks the facts that come with a report, in the address. Returns {meta} or {error}. */
 export function validateReportMeta(params) {
   const appId = Number(params.get("appId"));
@@ -124,7 +159,8 @@ export function validateReportMeta(params) {
   if (typeof voter !== "string" || !/^[0-9a-f]{32}$/.test(voter)) return { error: "bad voter" };
   // The answer the player gave with this report, when the app says it: the answer itself reaches the relay just after the report, so the report cannot read it from the votes yet. Never a reason to refuse the report.
   const answer = params.get("answer");
-  return { meta: { appId, app, device, voter, ...(VERDICTS.has(answer) ? { answer } : {}) } };
+  // "it works, but not the controls": the app says so with the report, so the channel does not tell a plain "works".
+  return { meta: { appId, app, device, voter, ...(VERDICTS.has(answer) ? { answer } : {}), ...(answer === "works" && params.get("noControls") === "1" ? { noControls: true } : {}) } };
 }
 
 const MAX_DISCORD_NAME = 40;
@@ -186,11 +222,17 @@ const ROUTES = {
   "/test/libraries": { table: "libraries_test", report: true },
   "/game-defaults": { table: "game_defaults", defaults: true },
   "/test/game-defaults": { table: "game_defaults_test", defaults: true },
+  "/controllers": { table: "controller_feedback", controllers: true },
+  "/test/controllers": { table: "controller_feedback_test", controllers: true },
   "/incompatible": { table: "incompatible", reasons: "incompatible_reasons", list: true },
   "/test/incompatible": { table: "incompatible_test", reasons: "incompatible_reasons_test", list: true },
 };
 // The reports of one game, listed for its details: the route says which table (the real votes or the test ones).
 const GAME_REPORTS = { "/reports": "votes", "/test/reports": "votes_test" };
+// The feedback on the controllers of one game, read on a public route: /controllers/<appId>?device=<family> (the real set) or /test/controllers/<appId> (the test one).
+const GAME_CONTROLLERS = { "/controllers": "controller_feedback", "/test/controllers": "controller_feedback_test" };
+// Every send is also a line of the history of its set, where nothing is replaced.
+export const CONTROLLER_HISTORY = { controller_feedback: "controller_feedback_history", controller_feedback_test: "controller_feedback_history_test" };
 // What only the developer reads: the list of reports and each report. The route says which table (the real one or the test one).
 const ADMIN = { "/admin/reports": "reports", "/admin/test/reports": "reports_test" };
 
@@ -239,12 +281,16 @@ async function recordVote(env, table, values, issues, checked) {
  * that follows a "does not work" is seen as the change it is. Read from the history, where every answer is a line.
  */
 async function previousAnswer(env, table, appId, voter, verdict) {
-  try {
-    const [row] = (await env.DB.prepare(`SELECT verdict, app, updated FROM ${HISTORY[table]} WHERE app_id = ? AND voter = ? AND verdict <> ? ORDER BY id DESC LIMIT 1`).bind(appId, voter, verdict).all()).results;
-    return row ?? null;
-  } catch {
-    return null;
+  // With the issues, so that an earlier "works, but not the controls" is not told as a plain "works"; a database without that column answers without them.
+  for (const columns of ["verdict, app, updated, issues", "verdict, app, updated"]) {
+    try {
+      const [row] = (await env.DB.prepare(`SELECT ${columns} FROM ${HISTORY[table]} WHERE app_id = ? AND voter = ? AND verdict <> ? ORDER BY id DESC LIMIT 1`).bind(appId, voter, verdict).all()).results;
+      return row ?? null;
+    } catch {
+      // Try without the issues.
+    }
   }
+  return null;
 }
 
 /**
@@ -453,9 +499,63 @@ async function report(request, env, table, ctx) {
     } catch {
       // No model to tell.
     }
-    notifyReport(env, ctx, new URL(request.url).origin, { id, appId: meta.appId, app: meta.app, device: meta.device, model, codename, size: bytes.length }, answer, environment, voter);
+    notifyReport(env, ctx, new URL(request.url).origin, { id, appId: meta.appId, app: meta.app, device: meta.device, model, codename, size: bytes.length, noControls: meta.noControls === true }, answer, environment, voter);
   }
   return reply(204);
+}
+
+/**
+ * Keeps a player's feedback on the controllers: one current line for each game, player and family of device (the last send replaces the one before, so a player who changed their
+ * mapping counts only for the current one), and every send is a line of the history. The player is stored as the same short hash as the votes. Nothing else about them is kept.
+ */
+async function controllers(request, env, table) {
+  if (env.LIMITER) {
+    const { success } = await env.LIMITER.limit({ key: `controllers:${request.headers.get("CF-Connecting-IP") ?? "unknown"}` });
+    if (!success) return reply(429, { error: "too many answers" });
+  }
+  const text = await request.text();
+  if (new TextEncoder().encode(text).length > MAX_CONTROLLER_BODY_BYTES) return reply(413, { error: "too large" });
+  let message;
+  try {
+    message = JSON.parse(text);
+  } catch {
+    return reply(400, { error: "not json" });
+  }
+  const { feedback, error } = validateController(message);
+  if (error) return reply(400, { error });
+  const voter = await voterHash(feedback.voter, env.VOTER_SALT);
+  const now = thisHour();
+  const values = [feedback.appId, voter, feedback.device, feedback.mapping, feedback.preset ?? null, feedback.answer, feedback.app, now];
+  try {
+    await env.DB.prepare(`INSERT INTO ${table} (app_id, voter, device, mapping, preset, answer, app, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (app_id, voter, device) DO UPDATE SET mapping = excluded.mapping, preset = excluded.preset, answer = excluded.answer, app = excluded.app, updated = excluded.updated`).bind(...values).run();
+    await env.DB.prepare(`INSERT INTO ${CONTROLLER_HISTORY[table]} (app_id, voter, device, mapping, preset, answer, app, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(...values).run();
+  } catch {
+    // What the database said stays here: the app only learns that it was not saved.
+    return reply(500, { error: "not saved" });
+  }
+  return reply(200, { ok: true });
+}
+
+/**
+ * The mappings of one game that players found working, for one family of device: for each, how many players' last answer was works, partly or not (a player counts only for their current
+ * mapping). The most confirmed first, at most [limit], only those with at least one "works". Nothing about any player. Shared with the console. When players answered the same exact mapping
+ * with different `preset` values, the one shown is a named preset first (the greatest of faces, dpad_vertical, dpad_horizontal by name), then `auto`, then null.
+ */
+export async function controllerMappings(env, table, appId, device, limit = MAX_CONTROLLER_MAPPINGS) {
+  const rows = (await env.DB.prepare(`SELECT mapping, COALESCE(MAX(CASE WHEN preset <> 'auto' THEN preset END), MAX(preset)) AS preset, SUM(answer = 'works') AS works, SUM(answer = 'partial') AS partial, SUM(answer = 'fails') AS fails FROM ${table} WHERE app_id = ? AND device = ? GROUP BY mapping HAVING SUM(answer = 'works') >= 1 ORDER BY works DESC, partial DESC, fails ASC, mapping LIMIT ?`).bind(appId, device, limit).all()).results;
+  return rows.map((row) => ({ mapping: row.mapping, preset: row.preset ?? null, works: row.works, partial: row.partial, fails: row.fails }));
+}
+
+async function gameControllers(env, table, appId, device) {
+  if (!DEVICES.has(device)) return reply(400, { error: "bad device" });
+  let mappings;
+  try {
+    mappings = await controllerMappings(env, table, appId, device);
+  } catch {
+    return reply(500, { error: "not read" });
+  }
+  return reply(200, { v: 1, mappings }, { "cache-control": "public, max-age=60" });
 }
 
 /** True when the request carries the developer's token. No token set in the relay means nobody can read. */
@@ -502,15 +602,16 @@ async function summary(env, table) {
     game.devices[row.device] = { works: row.works, offlineOnly: row.offlineOnly, fails: row.fails, worksOffline: row.worksOffline };
     byGame.set(row.appId, game);
   }
-  // What players ticked as going wrong, counted for the game and for each kind of device: the votes that are still a problem only (a fixed one counts as "works").
+  // What players ticked as going wrong, counted for the game and for each kind of device: the votes that are still a problem only (a fixed one counts as "works", and so does "works but not the
+  // controls", which the console counts apart).
   // A database that has not had the migration of the issues yet has none to count: the summary is the same as before.
   let issueRows = [];
   try {
     // With the model when the database has it (migration 0013), to count the problems for each model too.
     try {
-      issueRows = (await env.DB.prepare(`SELECT app_id AS appId, device, model, issues FROM ${table} WHERE fixed IS NULL AND issues IS NOT NULL AND issues <> ''`).all()).results;
+      issueRows = (await env.DB.prepare(`SELECT app_id AS appId, device, model, issues FROM ${table} WHERE fixed IS NULL AND verdict <> 'works' AND issues IS NOT NULL AND issues <> ''`).all()).results;
     } catch {
-      issueRows = (await env.DB.prepare(`SELECT app_id AS appId, device, issues FROM ${table} WHERE fixed IS NULL AND issues IS NOT NULL AND issues <> ''`).all()).results;
+      issueRows = (await env.DB.prepare(`SELECT app_id AS appId, device, issues FROM ${table} WHERE fixed IS NULL AND verdict <> 'works' AND issues IS NOT NULL AND issues <> ''`).all()).results;
     }
   } catch {
     issueRows = [];
@@ -724,6 +825,14 @@ export default {
       if (!env.DB) return reply(500, { error: "relay not configured" });
       return request.method === "GET" ? gameReports(env, GAME_REPORTS[reportsRoute], Number(appId)) : reply(405, { error: "use GET" });
     }
+    // The feedback on the controllers of one game, read by the app: /controllers/<appId>?device=<family> (the real set) or /test/controllers/<appId> (the test one).
+    const controllersRoute = Object.keys(GAME_CONTROLLERS).find((base) => path.startsWith(`${base}/`));
+    if (controllersRoute) {
+      const appId = path.slice(controllersRoute.length + 1);
+      if (!/^\d{1,9}$/.test(appId)) return reply(404, { error: "not found" });
+      if (!env.DB) return reply(500, { error: "relay not configured" });
+      return request.method === "GET" ? gameControllers(env, GAME_CONTROLLERS[controllersRoute], Number(appId), new URL(request.url).searchParams.get("device")) : reply(405, { error: "use GET" });
+    }
     const developerRoute = Object.keys(ADMIN).find((base) => path === base || path.startsWith(`${base}/`));
     if (developerRoute) {
       if (!env.DB) return reply(500, { error: "relay not configured" });
@@ -737,6 +846,7 @@ export default {
     if (!env.DB) return reply(500, { error: "relay not configured" });
     if (route.defaults) return request.method === "GET" ? gameDefaults(env, route.table) : reply(405, { error: "use GET" });
     if (route.list) return request.method === "GET" ? incompatibleList(env, route.table, route.reasons, new URL(request.url).searchParams.get("v") === "2") : reply(405, { error: "use GET" });
+    if (route.controllers) return request.method === "POST" ? controllers(request, env, route.table) : reply(405, { error: "use POST" });
     if (route.report) return request.method === "POST" ? report(request, env, route.table, ctx) : reply(405, { error: "use POST" });
     if (!route.write) return request.method === "GET" ? summary(env, route.table) : reply(405, { error: "use GET" });
     return request.method === "POST" ? vote(request, env, route.table, ctx) : reply(405, { error: "use POST" });

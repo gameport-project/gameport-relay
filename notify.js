@@ -17,6 +17,8 @@ const ANSWERS = {
   offline_only: { text: "Works offline only", color: 0xf0b24a },
   fails: { text: "Does not work", color: 0xef6b6b },
 };
+/** The answer as the channel says it: a game that works but whose controls do not is not told as plain "Works". */
+const answerOf = (vote) => vote.verdict === "works" && vote.issues?.includes("no_controls") ? { text: "Works, but not the controls", color: 0xf0b24a } : ANSWERS[vote.verdict];
 // What a player ticked as going wrong, in words for the developer's channel.
 const ISSUE_WORDS = {
   no_image: "Nothing shows", flat_window: "Flat window instead of VR", closes: "Closes by itself", stuck_loading: "Stuck on loading", no_controls: "Controls missing or wrong",
@@ -153,13 +155,13 @@ function later(ctx, work) {
 }
 
 /** The player's earlier answer ({ verdict, app, updated }) as the channel says it: "Does not work (0.9.4-alpha.16, 2026-11-23)". */
-const beforeText = (before) => `${ANSWERS[before.verdict]?.text ?? before.verdict} (${before.app}, ${before.updated})`;
+const beforeText = (before) => `${answerOf({ verdict: before.verdict, issues: String(before.issues ?? "").split(",") })?.text ?? before.verdict} (${before.app}, ${before.updated})`;
 
 export function notifyVote(env, ctx, origin, vote, environment = "prod", player = null, before = null) {
   const webhook = webhookOf(env, environment);
   if (!webhook) return undefined;
   return later(ctx, (async () => {
-    const answer = ANSWERS[vote.verdict];
+    const answer = answerOf(vote);
     const info = await gameInfo(vote.appId);
     const name = info.name;
     const who = await playerOf(env, origin, player, environment);
@@ -216,7 +218,7 @@ export function notifyReport(env, ctx, origin, report, verdict, environment = "p
   return later(ctx, (async () => {
     const info = await gameInfo(report.appId);
     const name = info.name;
-    const answer = verdict ? ANSWERS[verdict] : null;
+    const answer = verdict ? answerOf({ verdict, issues: report.noControls ? ["no_controls"] : [] }) : null;
     const who = await playerOf(env, origin, player, environment);
     await send(webhook, {
       title: `${environment === "test" ? "[TEST] " : ""}New report: ${name}`,

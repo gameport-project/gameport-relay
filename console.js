@@ -14,7 +14,7 @@ import { DEVICE_CHOICES, deviceName as nameOf, knownModel, searchModels } from "
 import { ISSUE_SET } from "./issues.js";
 import { consolePage } from "./console_page.js";
 import { notifyVote } from "./notify.js";
-import { GAME_SETTINGS, HISTORY, deviceName, readReport, readTurns, thisHour, voterHash } from "./worker.js";
+import { GAME_SETTINGS, HISTORY, WORKS_CODE, controllerMappings, deviceName, readReport, readTurns, thisHour, voterHash } from "./worker.js";
 
 const VERDICTS = new Set(["works", "offline_only", "fails"]);
 const DEVICES = new Set(["quest", "pico", "phone", "tablet", "other"]);
@@ -45,6 +45,9 @@ const MAX_LABEL = 40;
 const CONTACT_TABLES = { prod: "player_contacts", test: "player_contacts_test" };
 // The games confirmed as incompatible, for the same two sets.
 const INCOMPATIBLE_TABLES = { prod: { games: "incompatible", reasons: "incompatible_reasons" }, test: { games: "incompatible_test", reasons: "incompatible_reasons_test" } };
+// The feedback of players on the controllers (see migration 0029), for the same two sets.
+const CONTROLLER_TABLES = { prod: "controller_feedback", test: "controller_feedback_test" };
+const CONSOLE_MAPPINGS = 5;
 // What the developer tells the app about each game, for the same two sets (see GAME_SETTINGS in worker.js).
 const DEFAULTS_TABLES = { prod: "game_defaults", test: "game_defaults_test" };
 const HEADER = "x-gameport-console";
@@ -214,7 +217,8 @@ async function add(message, env, table, environment, ctx, origin) {
   if (message.app !== undefined && (typeof message.app !== "string" || !/^[0-9A-Za-z._-]{1,32}$/.test(message.app))) return json(400, { error: "bad app" });
   // What the developer says went wrong, from the same fixed list as the app's: only for an answer that says something did.
   if (message.issues !== undefined && (!Array.isArray(message.issues) || message.issues.some((code) => typeof code !== "string" || !ISSUE_SET.has(code)))) return json(400, { error: "bad issues" });
-  const issues = fields.verdict === "works" ? [] : [...new Set(message.issues ?? [])];
+  // An answer that works keeps only "no_controls" (the game works, the controls do not), as the app's does.
+  const issues = fields.verdict === "works" ? (message.issues ?? []).includes(WORKS_CODE) ? [WORKS_CODE] : [] : [...new Set(message.issues ?? [])];
   const app = message.app || (await newestRelease(env, table)) || "admin";
   await env.DB.prepare(`INSERT INTO ${HISTORY[table]} (app_id, voter, verdict, app, game, device, offline, updated, voted_at, issues, model, codename) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(message.appId, voter, fields.verdict, app, null, fields.device, offline, today, thisHour(), issues.length ? issues.join(",") : null, deviceName(message.model), deviceName(message.codename)).run();
@@ -240,7 +244,8 @@ async function change(message, env, table, environment) {
   const model = message.model !== undefined ? message.model : row.model;
   const codename = message.model !== undefined ? null : row.codename;
   // The problems ticked by the player only go with an answer that says it fails: an answer made "works" from the console loses them, or it would count as "works with problems".
-  const issues = verdict === "works" ? null : row.issues;
+  // The one that stays is "no_controls", which an answer "works" may carry (the game works, the controls do not).
+  const issues = verdict === "works" ? (String(row.issues ?? "").split(",").includes(WORKS_CODE) ? WORKS_CODE : null) : row.issues;
   // "Worked offline" only means something for a vote that says it worked.
   const offline = verdict === "works" && (fields.offline ?? row.offline === 1) ? 1 : 0;
   let fixed = row.fixed;
@@ -457,6 +462,41 @@ async function votesWhere(environment, where, binds, env) {
   return rows.map((row) => ({ ...row, label: row.label ?? null, offline: row.offline === 1, deviceName: nameOf(row.model, row.codename, row.device) }));
 }
 
+/**
+ * What players said about the controllers of one game, for each family of device: how many players' last answer was works, partly or not, how many answered "the game works, but not the
+ * controls" in their vote, and the mappings most confirmed. Nothing about any player. A database that has not had migration 0029 answers with no feedback.
+ */
+async function controllersOf(url, env) {
+  const environment = url.searchParams.get("env");
+  const table = TABLES[environment];
+  if (!table) return json(400, { error: "bad env" });
+  const appId = Number(url.searchParams.get("appId"));
+  if (!validId(appId)) return json(400, { error: "bad appId" });
+  const feedback = CONTROLLER_TABLES[environment];
+  const devices = {};
+  const own = (device) => (devices[device] ??= { works: 0, partial: 0, fails: 0, auto: { works: 0, partial: 0, fails: 0 }, chosen: { works: 0, partial: 0, fails: 0 }, noControls: 0, mappings: [] });
+  // A vote marked as fixed counts as "works" and carries no problem; an old "does not work" that only ticked the controls stays "does not work" and is not counted here.
+  try {
+    for (const row of (await env.DB.prepare(`SELECT device, COUNT(*) AS n FROM ${table} WHERE app_id = ? AND verdict = 'works' AND fixed IS NULL AND instr(',' || COALESCE(issues, '') || ',', ',${WORKS_CODE},') > 0 GROUP BY device`).bind(appId).all()).results) own(row.device).noControls = row.n;
+  } catch {
+    // No column of the issues yet.
+  }
+  try {
+    // GamePort's own split (preset auto) apart from the mappings the players chose, to see whether the automatic one is right.
+    for (const row of (await env.DB.prepare(`SELECT device, COALESCE(preset = 'auto', 0) AS auto, SUM(answer = 'works') AS works, SUM(answer = 'partial') AS partial, SUM(answer = 'fails') AS fails FROM ${feedback} WHERE app_id = ? GROUP BY device, COALESCE(preset = 'auto', 0)`).bind(appId).all()).results) {
+      const device = own(row.device);
+      Object.assign(row.auto ? device.auto : device.chosen, { works: row.works, partial: row.partial, fails: row.fails });
+      device.works += row.works;
+      device.partial += row.partial;
+      device.fails += row.fails;
+    }
+    for (const device of Object.keys(devices)) devices[device].mappings = await controllerMappings(env, feedback, appId, device, CONSOLE_MAPPINGS);
+  } catch {
+    // No table for it yet.
+  }
+  return json(200, { devices });
+}
+
 /** The numbers of the console's home for one set: the days, the games that work, the best players and games, the devices, the versions in use and the changes of the week. */
 async function home(url, env) {
   const environment = url.searchParams.get("env");
@@ -492,7 +532,16 @@ async function home(url, env) {
   // The same by kind of device ("kind:quest"), the way the list of games on the left filters: the two then agree.
   for (const kind of [...new Set(lines.map((line) => line.device).filter(Boolean))].slice(0, 6)) evolutionByDevice[`kind:${kind}`] = evolutionOf(lines.filter((line) => line.device === kind), lastDays);
   const names = await namesOf(environment, top.map((row) => row.voter), env);
+  // How many games have feedback on their controllers, and how many players answered it, and how many of them judged GamePort's automatic split (preset auto) or a mapping they chose (a player who did both counts in both).
+  let controllers = { games: 0, players: 0, auto: 0, chosen: 0 };
+  try {
+    const [row] = (await env.DB.prepare(`SELECT COUNT(DISTINCT app_id) AS games, COUNT(DISTINCT voter) AS players, COUNT(DISTINCT CASE WHEN preset = 'auto' THEN voter END) AS auto, COUNT(DISTINCT CASE WHEN preset IS NULL OR preset <> 'auto' THEN voter END) AS chosen FROM ${CONTROLLER_TABLES[environment]}`).all()).results;
+    controllers = { games: row.games, players: row.players, auto: row.auto, chosen: row.chosen };
+  } catch {
+    // No table for it yet.
+  }
   return json(200, {
+    controllers,
     today,
     daily: dailyOf(lines, reports.map((row) => row.day), days),
     evolution: evolutionOf(lines, lastDays),
@@ -943,6 +992,7 @@ export async function handleConsole(request, env, ctx) {
       });
     }
     if (url.pathname === "/console/api/votes") return request.method === "GET" ? await list(url, env) : json(405, { error: "use GET" });
+    if (url.pathname === "/console/api/controllers") return request.method === "GET" ? await controllersOf(url, env) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/models") return request.method === "GET" ? json(200, { models: searchModels(url.searchParams.get("q")) }) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/app") return request.method === "GET" ? await appInfo(url) : json(405, { error: "use GET" });
     if (url.pathname === "/console/api/price") return request.method === "GET" ? await appPrice(url) : json(405, { error: "use GET" });
